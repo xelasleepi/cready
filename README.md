@@ -1,5 +1,7 @@
 # cready
 
+**English** · [Français](README.fr.md)
+
 One command that takes a blank machine to a working, **verified** C and C++ setup.
 
 I wrote this for **Université Sorbonne Paris Nord (Paris 13)** students starting their
