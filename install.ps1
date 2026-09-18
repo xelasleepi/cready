@@ -13,8 +13,8 @@
       * Visual Studio Code and/or Kate, with cpptools and clangd
       * A verified test compile using ANSI C semantics with // comments
 
-    Speaks English and French. The language follows your Windows display
-    language and can be forced with CBOOT_LANG.
+    Speaks French (default) and English. It asks which one you want before
+    anything else; CBOOT_LANG=fr|en skips the question.
 
     Every step is skip-if-present, so re-running is safe and cheap.
 
@@ -32,7 +32,7 @@
     Configuration is read from environment variables because a piped
     `irm | iex` script cannot accept param() arguments:
 
-        $env:CBOOT_LANG         = 'fr'      # en | fr (auto-detected)
+        $env:CBOOT_LANG         = 'en'      # fr | en (default fr; skips the question)
         $env:CBOOT_PROFILE      = 'c'       # c | cpp | full  (skips the question)
         $env:CBOOT_EDITOR       = 'kate'    # vscode | kate | both | none
         $env:CBOOT_ASSUME_YES   = '1'       # accept every default, never prompt
@@ -59,16 +59,11 @@ function Get-EnvOrDefault {
     return $value
 }
 
-# Follow the Windows display language unless told otherwise. A French student
-# on a French system should not have to know an environment variable exists.
-function Get-DefaultLanguage {
-    try {
-        if ((Get-UICulture).TwoLetterISOLanguageName -eq 'fr') { return 'fr' }
-        if ((Get-Culture).TwoLetterISOLanguageName   -eq 'fr') { return 'fr' }
-    }
-    catch { }
-    return 'en'
-}
+# French is the default, because that is who this was written for. English is a
+# first-class option, not an afterthought: when the language was not pinned via
+# the environment, the very first thing the script does is ask, bilingually.
+$LanguageWasPinned = -not [string]::IsNullOrWhiteSpace(
+    [Environment]::GetEnvironmentVariable('CBOOT_LANG', 'Process'))
 
 $Config = @{
     Msys2Root   = Get-EnvOrDefault 'CBOOT_MSYS2_ROOT' 'C:\msys64'
@@ -77,7 +72,7 @@ $Config = @{
     ScaffoldDir = Get-EnvOrDefault 'CBOOT_SCAFFOLD_DIR' ''
     Profile     = Get-EnvOrDefault 'CBOOT_PROFILE' ''
     Editor      = Get-EnvOrDefault 'CBOOT_EDITOR' ''
-    Language    = (Get-EnvOrDefault 'CBOOT_LANG' (Get-DefaultLanguage)).ToLower()
+    Language    = (Get-EnvOrDefault 'CBOOT_LANG' 'fr').ToLower()
     AssumeYes   = (Get-EnvOrDefault 'CBOOT_ASSUME_YES' '0') -eq '1'
     MaxRetries  = 5
 }
@@ -269,6 +264,29 @@ function Write-Banner {
     Write-Host ("   " + (T 'built_for2'))
     Write-Host ("   " + (T 'not_affiliated')) -ForegroundColor DarkGray
     Write-Host ''
+    # Always shown, in both languages, whichever one is active.
+    Write-Host '   Francais / English  --  $env:CBOOT_LANG=''fr'' | ''en''' -ForegroundColor Cyan
+    Write-Host ''
+}
+
+# Asked before anything else, and printed in both languages, so an English
+# speaker never has to guess. Skipped entirely when CBOOT_LANG was set.
+function Get-Language {
+    if (-not (Test-CanPrompt)) { return 'fr' }
+
+    Write-Host ''
+    Write-Host '   +---------------------------------------+'
+    Write-Host '   |   Langue  /  Language                 |'
+    Write-Host '   +---------------------------------------+'
+    Write-Host ''
+    Write-Host '     1) Francais   (par defaut / default)'
+    Write-Host '     2) English'
+    Write-Host ''
+
+    switch (Read-Answer 'Choisissez / Choose' '1') {
+        '2'     { return 'en' }
+        default { return 'fr' }
+    }
 }
 
 function Write-Step {
@@ -890,6 +908,11 @@ int main(void)
 # --------------------------------------------------------------------------
 
 function Invoke-Bootstrap {
+    # Before the banner, because the banner itself is localized.
+    if (-not $LanguageWasPinned) {
+        $Config.Language = Get-Language
+    }
+
     Write-Banner
 
     Write-Host ("   " + (T 'detected' ([Environment]::OSVersion.Version)))

@@ -1,20 +1,26 @@
 # cready
 
-**English** · [Français](README.fr.md)
+**Français** · **[English version →](README.en.md)**
 
-One command that takes a blank machine to a working, **verified** C and C++ setup.
+> **English speakers:** this tool is fully bilingual.
+> Read the **[English README](README.en.md)**, or just run the installer — it asks you
+> to pick a language before anything else. You can also force it with `CBOOT_LANG=en`.
 
-I wrote this for **Université Sorbonne Paris Nord (Paris 13)** students starting their
-ANSI C coursework, because setting up a compiler on Windows is the first thing that stops
-people, and because the assignments are graded against ANSI C while everyone still wants
-`//` comments.
+Une seule commande pour passer d'une machine vierge à un environnement C et C++
+fonctionnel et **vérifié**.
 
-It is not affiliated with or endorsed by the university, and there is nothing Paris
-13-specific in the code. **Any student, at any school, on any machine, can run it.**
+Je l'ai écrit pour les étudiants de l'**Université Sorbonne Paris Nord (Paris 13)** qui
+commencent leurs TP de C ANSI, parce qu'installer un compilateur sous Windows est le
+premier obstacle sur lequel tout le monde bloque, et parce que les TP sont notés en C ANSI
+alors que tout le monde veut quand même écrire des commentaires `//`.
+
+Ce projet n'est ni affilié ni approuvé par l'université, et rien dans le code n'est
+spécifique à Paris 13. **N'importe quel étudiant, dans n'importe quelle école, sur
+n'importe quelle machine, peut l'utiliser.**
 
 ---
 
-## Install
+## Installation
 
 ### Windows (PowerShell)
 
@@ -22,195 +28,219 @@ It is not affiliated with or endorsed by the university, and there is nothing Pa
 irm https://raw.githubusercontent.com/xelasleepi/cready/main/install.ps1 | iex
 ```
 
-### Linux, WSL, or macOS
+### Linux, WSL ou macOS
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xelasleepi/cready/main/install.sh | bash
 ```
 
-The script asks what you need, installs only that, and then **proves it works** by
-compiling and running a real program before it claims success.
+Le script vous demande ce dont vous avez besoin, n'installe que cela, puis **prouve que
+tout fonctionne** en compilant et en exécutant un vrai programme avant d'annoncer une
+réussite.
 
-**It speaks English and French**, following your system language. Force it with
-`CBOOT_LANG=fr` or `CBOOT_LANG=en`.
+**Le script est en français par défaut**, et il commence par vous demander la langue :
 
 ```
-   What do you need this machine set up for?
+   +---------------------------------------+
+   |   Langue  /  Language                 |
+   +---------------------------------------+
 
-     1) C only        - ANSI C coursework (gcc, gdb, make)
-     2) C and C++     - adds the g++ compiler
-     3) Full setup    - C, C++, and an editor
-
-   Which editor do you want?
-
-     1) Visual Studio Code  - full IDE features, debugger, IntelliSense
-     2) Kate                - lightweight KDE editor, fast, simple
-     3) Both
-     4) Neither             - I already have one
+     1) Francais   (par defaut / default)
+     2) English
 ```
+
+Pour sauter la question : `CBOOT_LANG=fr` ou `CBOOT_LANG=en`.
+
+```
+   Pour quel usage voulez-vous configurer cette machine ?
+
+     1) C uniquement  - TP de C ANSI (gcc, gdb, make)
+     2) C et C++      - ajoute le compilateur g++
+     3) Complet       - C, C++ et un éditeur
+
+   Quel éditeur voulez-vous ?
+
+     1) Visual Studio Code  - IDE complet, débogueur, IntelliSense
+     2) Kate                - éditeur KDE léger, rapide, simple
+     3) Les deux
+     4) Aucun               - j'en ai déjà un
+```
+
+Aux questions par oui/non, le script accepte `o` comme `y`.
 
 ---
 
-## What you get
+## Ce que vous obtenez
 
 | | Windows | Linux / WSL / macOS |
 |---|---|---|
-| Compiler | MinGW-w64 GCC via MSYS2 (UCRT64) | distro GCC |
-| Also installed | `g++`, `gdb`, `mingw32-make` | `g++`, `gdb`, `make`, `valgrind` |
-| PATH | `C:\msys64\ucrt64\bin` added to **user** PATH | already on PATH |
-| Editor | VS Code and/or Kate | VS Code and/or Kate |
-| Editor extras | `ms-vscode.cpptools`, `clangd` for Kate | `ms-vscode.cpptools`, `clangd` for Kate |
-| Verified | compiles **and runs** a test program | compiles **and runs** a test program |
+| Compilateur | GCC MinGW-w64 via MSYS2 (UCRT64) | GCC de la distribution |
+| Également installé | `g++`, `gdb`, `mingw32-make` | `g++`, `gdb`, `make`, `valgrind` |
+| PATH | `C:\msys64\ucrt64\bin` ajouté au PATH **utilisateur** | déjà dans le PATH |
+| Éditeur | VS Code et/ou Kate | VS Code et/ou Kate |
+| Extras éditeur | `ms-vscode.cpptools`, `clangd` pour Kate | `ms-vscode.cpptools`, `clangd` pour Kate |
+| Vérifié | compile **et exécute** un programme test | compile **et exécute** un programme test |
 
-### Which editor?
+### Quel éditeur choisir ?
 
-**VS Code** is the safe default: IntelliSense, a real debugger, and the generated
-`launch.json` means F5 just builds and runs your program.
+**VS Code** est le choix sûr : IntelliSense, un vrai débogueur, et grâce au `launch.json`
+généré, la touche F5 compile et lance votre programme directement.
 
-**Kate** is worth picking if VS Code feels heavy or your machine is old. It starts
-instantly and stays out of your way. It has no built-in C support, so the installer also
-sets up `clangd` alongside it — after installing, enable **Settings → Plugins → LSP Client**
-in Kate and you get completion and error squiggles.
+**Kate** vaut le coup si VS Code vous paraît lourd ou si votre machine est ancienne. Il
+démarre instantanément et ne vous encombre pas. Il n'a aucun support du C intégré, donc
+l'installateur met aussi en place `clangd` : après l'installation, activez
+**Settings → Plugins → LSP Client** dans Kate et vous aurez la complétion et le
+soulignement des erreurs.
 
-Picking "Both" installs both and lets you decide later.
+Choisir « Both » installe les deux et vous laisse décider plus tard.
 
-Every step is skip-if-present. Re-running is safe, fast, and is also the supported way
-to **resume a failed install**: finished work is detected, and partial downloads are
-reused from the package cache.
+Chaque étape est ignorée si elle est déjà faite. Relancer le script est sans risque,
+rapide, et c'est aussi la manière prévue de **reprendre une installation qui a échoué** :
+ce qui est déjà terminé est détecté, et les téléchargements partiels sont réutilisés
+depuis le cache.
 
 ---
 
-## The ANSI C + `//` comments problem
+## Le problème du C ANSI avec les commentaires `//`
 
-Strict ANSI C (C89/C90) does not allow `//` line comments. If your course requires ANSI C
-but you want `//`, the flag you want is **`-std=gnu89`**: C89 semantics, with `//` accepted.
+Le C ANSI strict (C89/C90) n'autorise pas les commentaires de ligne `//`. Si votre cours
+impose le C ANSI mais que vous voulez utiliser `//`, l'option qu'il vous faut est
+**`-std=gnu89`** : la sémantique du C89, avec `//` accepté.
 
-Measured on GCC 16.2.0:
+Mesuré sur GCC 16.2.0 :
 
-| Flag | `//` comments | Result |
+| Option | Commentaires `//` | Résultat |
 |---|---|---|
-| `-std=c89 -pedantic` | `error: C++ style comments are not allowed in ISO C90` | **fails to build** |
-| `-std=gnu89` | accepted silently | **C89 + `//`**, the default here |
-| `-std=gnu89 -pedantic` | warning only | builds, warns |
-| `-std=c99` | fully legal | builds clean |
+| `-std=c89 -pedantic` | `error: C++ style comments are not allowed in ISO C90` | **la compilation échoue** |
+| `-std=gnu89` | accepté sans rien dire | **C89 + `//`**, la valeur par défaut ici |
+| `-std=gnu89 -pedantic` | simple avertissement | compile, avec un warning |
+| `-std=c99` | parfaitement légal | compile proprement |
 
-So:
+Donc :
 
 ```bash
 gcc -std=gnu89 -Wall -Wextra main.c -o main
 ```
 
-Pick a different one any time with `CBOOT_STD` (see below).
+Vous pouvez en choisir un autre à tout moment avec `CBOOT_STD` (voir plus bas).
 
 ---
 
-## Running your program
+## Exécuter votre programme
 
-This trips up almost everyone coming from Linux.
+C'est ce qui piège presque tout le monde en passant de Linux à Windows.
 
-| Shell | Command |
+| Terminal | Commande |
 |---|---|
-| **cmd** | `main.exe` or `.\main.exe`. `./main` does **not** work |
-| **PowerShell** | `.\main.exe` (the `.\` is required) |
+| **cmd** | `main.exe` ou `.\main.exe`. `./main` ne fonctionne **pas** |
+| **PowerShell** | `.\main.exe` (le `.\` est obligatoire) |
 | **Git Bash / WSL / Linux** | `./main` |
 
-`cmd` treats `/` as the option character, so `./main` fails with `'.' is not recognized`.
-On Windows GCC also produces `.exe`, and with no `-o` the default is **`a.exe`**, not `a.out`.
+`cmd` traite `/` comme le caractère d'option : `./main` échoue donc avec
+`'.' n'est pas reconnu`. Sous Windows, GCC produit aussi un `.exe`, et sans `-o` le nom
+par défaut est **`a.exe`**, pas `a.out`.
 
 ---
 
 ## Options
 
-Set these before running to skip the questions. Useful for lab machines and scripted setups.
+Définissez ces variables avant de lancer le script pour sauter les questions. Pratique
+pour les machines de TP et les installations automatisées.
 
-| Variable | Does what | Default |
+| Variable | Rôle | Défaut |
 |---|---|---|
-| `CBOOT_LANG` | `en` or `fr` | *system language* |
-| `CBOOT_PROFILE` | `c`, `cpp`, or `full` (skips the prompt) | *asks* |
-| `CBOOT_EDITOR` | `vscode`, `kate`, `both`, or `none` | *asks* |
-| `CBOOT_ASSUME_YES` | `1` = never prompt, take every default | `0` |
-| `CBOOT_STD` | standard for the verification compile | `gnu89` |
-| `CBOOT_SCAFFOLD_DIR` | also create a starter project there | *none* |
-| `CBOOT_SKIP_VSCODE` | `1` = never touch VS Code | `0` |
-| `CBOOT_MSYS2_ROOT` | MSYS2 location (Windows only) | `C:\msys64` |
+| `CBOOT_LANG` | `fr` ou `en` (saute la question de langue) | `fr` |
+| `CBOOT_PROFILE` | `c`, `cpp` ou `full` (saute la question) | *demande* |
+| `CBOOT_EDITOR` | `vscode`, `kate`, `both` ou `none` | *demande* |
+| `CBOOT_ASSUME_YES` | `1` = ne jamais demander, accepter tous les défauts | `0` |
+| `CBOOT_STD` | standard utilisé pour la compilation de vérification | `gnu89` |
+| `CBOOT_SCAFFOLD_DIR` | crée aussi un projet de départ à cet endroit | *aucun* |
+| `CBOOT_SKIP_VSCODE` | `1` = ne jamais toucher à VS Code | `0` |
+| `CBOOT_MSYS2_ROOT` | emplacement de MSYS2 (Windows uniquement) | `C:\msys64` |
 
-Windows:
+Windows :
 
 ```powershell
 $env:CBOOT_PROFILE='full'; $env:CBOOT_EDITOR='kate'; $env:CBOOT_SCAFFOLD_DIR="$HOME\c-lab"
 irm https://raw.githubusercontent.com/xelasleepi/cready/main/install.ps1 | iex
 ```
 
-Linux / WSL:
+Linux / WSL :
 
 ```bash
 CBOOT_PROFILE=full CBOOT_EDITOR=both CBOOT_SCAFFOLD_DIR=~/c-lab bash install.sh
 ```
 
-`CBOOT_STD` only accepts real GCC standard names (`c89`, `gnu89`, `c99`, …). Anything else
-is rejected, because that value gets written into a generated Makefile.
+`CBOOT_STD` n'accepte que de vrais noms de standards GCC (`c89`, `gnu89`, `c99`, …). Toute
+autre valeur est rejetée, car elle est écrite dans un Makefile généré.
 
-### Starter project
+### Projet de départ
 
-With `CBOOT_SCAFFOLD_DIR` set you also get a ready-to-run folder:
+Avec `CBOOT_SCAFFOLD_DIR`, vous obtenez aussi un dossier prêt à l'emploi :
 
 ```
-main.c                          hello world, ANSI C with // comments
-Makefile                        make / make run / make clean   (Linux only)
-.vscode/tasks.json              Ctrl+Shift+B builds the open file
-.vscode/launch.json             F5 builds and debugs with gdb
-.vscode/c_cpp_properties.json   IntelliSense pinned to C89
+main.c                          hello world, C ANSI avec commentaires //
+Makefile                        make / make run / make clean   (Linux uniquement)
+.vscode/tasks.json              Ctrl+Maj+B compile le fichier ouvert
+.vscode/launch.json             F5 compile et débogue avec gdb
+.vscode/c_cpp_properties.json   IntelliSense réglé sur C89
 ```
 
 ---
 
-## A note for WSL users
+## Note pour les utilisateurs de WSL
 
-If you are on WSL, run **`install.sh` inside the distro**, because that is where your compiler
-belongs. The script detects WSL and will *not* install the Linux GUI build of VS Code.
-Instead, install VS Code **on Windows** and add the
-[`ms-vscode-remote.remote-wsl`](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl)
-extension, then run `code .` from your WSL shell. That is the supported setup; installing
-a GUI editor inside WSL is not.
+Sous WSL, lancez **`install.sh` à l'intérieur de la distribution**, car c'est là que doit
+se trouver votre compilateur. Le script détecte WSL et n'installera *pas* la version
+graphique Linux de VS Code. À la place, installez VS Code **sous Windows** et ajoutez
+l'extension
+[`ms-vscode-remote.remote-wsl`](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl),
+puis lancez `code .` depuis votre terminal WSL. C'est la configuration officiellement
+prise en charge ; installer un éditeur graphique dans WSL ne l'est pas.
 
-You do not need the Windows toolchain *and* the WSL one. Pick whichever matches where you
-write your code.
-
----
-
-## Troubleshooting
-
-**`gcc` still not found after installing (Windows).**
-Open a **new** terminal. Already-running shells and editors hold the PATH they started
-with. If it still fails, check `C:\msys64\ucrt64\bin` is present in your user PATH.
-
-**The compiler runs but produces no output and exits 1 (Windows).**
-`gcc.exe` launches a backend, `cc1.exe`, which lives outside `bin\` and loads its DLLs
-**from PATH**. If `C:\msys64\ucrt64\bin` is missing from PATH, `cc1.exe` dies with
-`0xC0000135 STATUS_DLL_NOT_FOUND` before it can print anything, which looks like a
-silent failure. Fix the PATH entry, or invoke gcc from a shell that has it.
-
-**Download errors / timeouts mid-install (Windows).**
-MSYS2 mirrors time out fairly often. The script already retries five times, and
-completed downloads are cached, so just run it again and it picks up where it stopped.
-
-**`make` is not found (Windows).**
-MSYS2 names it **`mingw32-make`**. Either call that, or create a `make.cmd` shim.
-
-**Permission denied (Linux).**
-The script needs `sudo` for package installation. Run it as a normal user with sudo
-rights, not as root via `curl | sudo bash`.
+Vous n'avez pas besoin de la chaîne d'outils Windows *et* de celle de WSL. Choisissez
+celle qui correspond à l'endroit où vous écrivez votre code.
 
 ---
 
-## What it does not do
+## Dépannage
 
-- It does not modify the system-wide PATH, only your user PATH.
-- It does not install a full IDE like CLion or Visual Studio.
-- It does not touch an existing compiler without asking first.
-- On Windows it does not add `C:\msys64\usr\bin` to PATH, because that directory shadows
-  Windows and Git Bash tools like `find` and `ls` and causes confusing breakage.
+**`gcc` reste introuvable après l'installation (Windows).**
+Ouvrez un **nouveau** terminal. Les fenêtres et éditeurs déjà ouverts conservent le PATH
+qu'ils avaient au démarrage. Si cela ne suffit pas, vérifiez que
+`C:\msys64\ucrt64\bin` figure bien dans votre PATH utilisateur.
 
-## License
+**Le compilateur se lance, n'affiche rien et se termine avec le code 1 (Windows).**
+`gcc.exe` lance un programme interne, `cc1.exe`, qui se trouve en dehors de `bin\` et
+charge ses DLL **depuis le PATH**. Si `C:\msys64\ucrt64\bin` manque au PATH, `cc1.exe`
+meurt avec `0xC0000135 STATUS_DLL_NOT_FOUND` avant d'avoir pu afficher quoi que ce soit,
+ce qui ressemble à un échec silencieux. Corrigez l'entrée du PATH, ou lancez gcc depuis un
+terminal qui la possède.
 
-MIT. Use it, fork it, hand it to your classmates.
+**Erreurs ou délais de téléchargement pendant l'installation (Windows).**
+Les miroirs MSYS2 tombent en timeout assez souvent. Le script réessaie déjà cinq fois, et
+les téléchargements terminés sont mis en cache : relancez-le simplement, il reprend là où
+il s'était arrêté.
+
+**`make` est introuvable (Windows).**
+MSYS2 le nomme **`mingw32-make`**. Appelez-le sous ce nom, ou créez un raccourci
+`make.cmd`.
+
+**Permission refusée (Linux).**
+Le script a besoin de `sudo` pour installer les paquets. Lancez-le en tant qu'utilisateur
+normal disposant des droits sudo, et surtout pas en root via `curl | sudo bash`.
+
+---
+
+## Ce que le script ne fait pas
+
+- Il ne modifie pas le PATH système, seulement votre PATH utilisateur.
+- Il n'installe pas d'IDE complet comme CLion ou Visual Studio.
+- Il ne touche pas à un compilateur déjà installé sans demander d'abord.
+- Sous Windows, il n'ajoute pas `C:\msys64\usr\bin` au PATH, car ce dossier masque des
+  outils Windows et Git Bash comme `find` et `ls` et provoque des pannes difficiles à
+  comprendre.
+
+## Licence
+
+MIT. Utilisez-le, forkez-le, passez-le à vos camarades.

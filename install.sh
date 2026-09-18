@@ -11,8 +11,8 @@
 #   * Visual Studio Code and/or Kate, with cpptools and clangd
 #   * A verified test compile using ANSI C semantics with // comments
 #
-# Speaks English and French. The language follows your locale and can be
-# forced with CBOOT_LANG.
+# Speaks French (default) and English. It asks which one you want before
+# anything else; CBOOT_LANG=fr|en skips the question.
 #
 # This file is deliberately self-contained and exceeds the usual size limit for
 # a source file. It has to be: it is fetched and executed in one piece by
@@ -26,7 +26,7 @@
 #     chmod +x install.sh && ./install.sh
 #
 # Non-interactive overrides:
-#     CBOOT_LANG=fr              force French (auto-detected from $LANG)
+#     CBOOT_LANG=fr|en           skip the language question (default: fr)
 #     CBOOT_PROFILE=c|cpp|full   what to install (skips the question)
 #     CBOOT_EDITOR=vscode|kate|both|none   editor choice (skips the question)
 #     CBOOT_ASSUME_YES=1         accept every default
@@ -42,13 +42,14 @@ CBOOT_EDITOR="${CBOOT_EDITOR:-}"
 CBOOT_SCAFFOLD_DIR="${CBOOT_SCAFFOLD_DIR:-}"
 CBOOT_LANG="${CBOOT_LANG:-}"
 
-# Follow the user's locale unless told otherwise. A French student on a French
-# system should not have to know an environment variable exists.
-if [ -z "$CBOOT_LANG" ]; then
-    case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
-        fr*|FR*) CBOOT_LANG='fr' ;;
-        *)       CBOOT_LANG='en' ;;
-    esac
+# French is the default, because that is who this was written for. English is a
+# first-class option, not an afterthought: when the language was not pinned via
+# the environment, the very first thing the script does is ask, bilingually.
+CBOOT_LANG_EXPLICIT=0
+if [ -n "$CBOOT_LANG" ]; then
+    CBOOT_LANG_EXPLICIT=1
+else
+    CBOOT_LANG='fr'
 fi
 CBOOT_LANG="$(printf '%s' "$CBOOT_LANG" | tr '[:upper:]' '[:lower:]')"
 case "$CBOOT_LANG" in
@@ -364,6 +365,9 @@ banner() {
     printf '   %s\n' "$(msg built_for2)"
     printf '   %s%s%s\n' "$C_DIM" "$(msg not_affiliated)" "$C_RESET"
     printf '\n'
+    # Always shown, in both languages, whichever one is active.
+    printf '   %sFrancais / English  --  CBOOT_LANG=fr | CBOOT_LANG=en%s\n' "$C_CYAN" "$C_RESET"
+    printf '\n'
 }
 
 # --------------------------------------------------------------------------
@@ -403,6 +407,29 @@ confirm() {
     case "$answer" in
         [YyOo]*) return 0 ;;
         *)       return 1 ;;
+    esac
+}
+
+# Asked before anything else, and printed in both languages, so an English
+# speaker never has to guess. Skipped entirely when CBOOT_LANG was set.
+choose_language() {
+    if ! can_prompt; then
+        printf 'fr'
+        return
+    fi
+
+    {
+        printf '\n'
+        printf '   +---------------------------------------+\n'
+        printf '   |   Langue  /  Language                 |\n'
+        printf '   +---------------------------------------+\n\n'
+        printf '     1) Francais   (par defaut / default)\n'
+        printf '     2) English\n\n'
+    } >&2
+
+    case "$(ask 'Choisissez / Choose' '1')" in
+        2) printf 'en' ;;
+        *) printf 'fr' ;;
     esac
 }
 
@@ -973,6 +1000,11 @@ PROPS
 # --------------------------------------------------------------------------
 
 main() {
+    # Before the banner, because the banner itself is localized.
+    if [ "$CBOOT_LANG_EXPLICIT" = "0" ]; then
+        CBOOT_LANG="$(choose_language)"
+    fi
+
     banner
     detect_platform
 
