@@ -1,0 +1,25 @@
+# Build output
+*.exe
+*.o
+*.obj
+*.out
+*.a
+*.so
+*.dll
+a.out
+
+# Debug artifacts
+*.pdb
+*.dSYM/
+core
+vgcore.*
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Local scratch work
+/scratch/
+/tmp/
