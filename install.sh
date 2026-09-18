@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 #
-# C / C++ Development Environment Bootstrapper -- Linux, WSL and macOS
-# --------------------------------------------------------------------
-# Written for students of Universite Sorbonne Paris Nord (Paris 13) who need
-# an ANSI C toolchain for their coursework, but nothing here is specific to
-# that university -- any student on any distro can run it.
+# cready -- universal development environment bootstrapper (Linux, WSL, macOS)
+# ---------------------------------------------------------------------------
+# Written for students of Universite Sorbonne Paris Nord (Paris 13) who need an
+# ANSI C toolchain for their coursework, but nothing here is specific to that
+# university, and it is no longer limited to C.
 #
-# Installs and verifies:
-#   * gcc, g++, gdb, make (and valgrind where available)
-#   * Visual Studio Code and/or Kate, with cpptools and clangd
-#   * A verified test compile using ANSI C semantics with // comments
+# Installs, on request:
+#   C / C++   gcc, g++, gdb, make, valgrind
+#   C#        .NET SDK
+#   Rust      rustup, cargo, rustc
+#   Go        go
+#   Python    python3, pip
+#   Java      JDK (javac, java)
+#
+# Editors: Visual Studio Code, Kate, Vim.
+#
+# Every selected toolchain is verified by compiling and running a real
+# program before the script reports success.
 #
 # Speaks French (default) and English. It asks which one you want before
 # anything else; CBOOT_LANG=fr|en skips the question.
@@ -26,21 +34,31 @@
 #     chmod +x install.sh && ./install.sh
 #
 # Non-interactive overrides:
-#     CBOOT_LANG=fr|en           skip the language question (default: fr)
-#     CBOOT_PROFILE=c|cpp|full   what to install (skips the question)
-#     CBOOT_EDITOR=vscode|kate|both|none   editor choice (skips the question)
-#     CBOOT_ASSUME_YES=1         accept every default
-#     CBOOT_STD=gnu89            standard used by the verification compile
-#     CBOOT_SCAFFOLD_DIR=~/c-lab also create a starter project
+#     CBOOT_LANG=fr|en              skip the language question (default: fr)
+#     CBOOT_TOOLCHAINS=cpp,rust     what to install (default: asks; "cpp" if piped)
+#     CBOOT_EDITOR=vscode,vim|none  editors to install (default: asks)
+#     CBOOT_ASSUME_YES=1            accept every default
+#     CBOOT_STD=gnu89               standard used by the C verification compile
+#     CBOOT_SCAFFOLD_DIR=~/c-lab    also create a starter C project
 #
 set -uo pipefail
 
 CBOOT_STD="${CBOOT_STD:-gnu89}"
 CBOOT_ASSUME_YES="${CBOOT_ASSUME_YES:-0}"
-CBOOT_PROFILE="${CBOOT_PROFILE:-}"
+CBOOT_TOOLCHAINS="${CBOOT_TOOLCHAINS:-}"
 CBOOT_EDITOR="${CBOOT_EDITOR:-}"
 CBOOT_SCAFFOLD_DIR="${CBOOT_SCAFFOLD_DIR:-}"
 CBOOT_LANG="${CBOOT_LANG:-}"
+CBOOT_PROFILE="${CBOOT_PROFILE:-}"
+
+# CBOOT_PROFILE predates multi-toolchain support. Keep it working rather than
+# breaking anyone who copied an older command line.
+if [ -n "$CBOOT_PROFILE" ] && [ -z "$CBOOT_TOOLCHAINS" ]; then
+    case "$CBOOT_PROFILE" in
+        c|cpp) CBOOT_TOOLCHAINS='cpp'; [ -z "$CBOOT_EDITOR" ] && CBOOT_EDITOR='none' ;;
+        full)  CBOOT_TOOLCHAINS='cpp' ;;
+    esac
+fi
 
 # French is the default, because that is who this was written for. English is a
 # first-class option, not an afterthought: when the language was not pinned via
@@ -72,6 +90,11 @@ case "$CBOOT_STD" in
         ;;
 esac
 
+# Every id the script accepts. Anything else is rejected rather than ignored,
+# so a typo never silently installs nothing.
+ALL_TOOLCHAINS='cpp dotnet rust go python java'
+ALL_EDITORS='vscode kate vim'
+
 # --------------------------------------------------------------------------
 # Messages
 #
@@ -86,13 +109,12 @@ msg() {
     local key="$1"; shift
     local en='' fr=''
     case "$key" in
-    # -- banner / framing -------------------------------------------------
-    title)          en="C / C++ Development Environment Installer"
-                    fr="Installateur d'environnement de développement C / C++" ;;
+    title)          en="Universal Development Environment Installer"
+                    fr="Installateur universel d'environnement de développement" ;;
     built_for)      en="Built for Universite Sorbonne Paris Nord (Paris 13)"
                     fr="Conçu pour les étudiants de l'Université Sorbonne" ;;
-    built_for2)     en="students starting their ANSI C coursework."
-                    fr="Paris Nord (Paris 13) qui débutent en C ANSI." ;;
+    built_for2)     en="students, and for anyone else who needs a toolchain."
+                    fr="Paris Nord (Paris 13), et pour tous les autres." ;;
     not_affiliated) en="Not affiliated with the university -- usable by anyone."
                     fr="Sans lien avec l'université -- utilisable par tous." ;;
     detected)       en="Detected: %s"
@@ -102,85 +124,87 @@ msg() {
     wsl_suffix)     en="%s (WSL -- Linux inside Windows)"
                     fr="%s (WSL -- Linux dans Windows)" ;;
 
+    # -- toolchain names --------------------------------------------------
+    tc_cpp)         en="C / C++       - gcc, g++, gdb, make, valgrind"
+                    fr="C / C++       - gcc, g++, gdb, make, valgrind" ;;
+    tc_dotnet)      en="C#            - .NET SDK"
+                    fr="C#            - SDK .NET" ;;
+    tc_rust)        en="Rust          - rustup, cargo, rustc"
+                    fr="Rust          - rustup, cargo, rustc" ;;
+    tc_go)          en="Go            - go compiler and tools"
+                    fr="Go            - compilateur et outils Go" ;;
+    tc_python)      en="Python        - python3 and pip"
+                    fr="Python        - python3 et pip" ;;
+    tc_java)        en="Java          - JDK (javac, java)"
+                    fr="Java          - JDK (javac, java)" ;;
+
     # -- questions --------------------------------------------------------
-    q_profile)      en="What do you need this machine set up for?"
-                    fr="Pour quel usage voulez-vous configurer cette machine ?" ;;
-    q_profile_1)    en="  1) C only        - ANSI C coursework (gcc, gdb, make)"
-                    fr="  1) C uniquement  - TP de C ANSI (gcc, gdb, make)" ;;
-    q_profile_2)    en="  2) C and C++     - adds the g++ compiler"
-                    fr="  2) C et C++      - ajoute le compilateur g++" ;;
-    q_profile_3)    en="  3) Full setup    - C, C++, and an editor"
-                    fr="  3) Complet       - C, C++ et un éditeur" ;;
-    q_choose_123)   en="Choose 1, 2 or 3"
-                    fr="Choisissez 1, 2 ou 3" ;;
-    q_editor)       en="Which editor do you want?"
-                    fr="Quel éditeur voulez-vous ?" ;;
-    q_editor_1)     en="  1) Visual Studio Code  - full IDE features, debugger, IntelliSense"
-                    fr="  1) Visual Studio Code  - IDE complet, débogueur, IntelliSense" ;;
-    q_editor_2)     en="  2) Kate                - lightweight KDE editor, fast, simple"
-                    fr="  2) Kate                - éditeur KDE léger, rapide, simple" ;;
-    q_editor_3)     en="  3) Both"
-                    fr="  3) Les deux" ;;
-    q_editor_4)     en="  4) Neither             - I already have one"
-                    fr="  4) Aucun               - j'en ai déjà un" ;;
-    q_choose_1234)  en="Choose 1, 2, 3 or 4"
-                    fr="Choisissez 1, 2, 3 ou 4" ;;
+    q_tc)           en="Which languages do you want?"
+                    fr="Quels langages voulez-vous ?" ;;
+    q_multi)        en="Pick one or several, separated by commas (e.g. 1,3)"
+                    fr="Choisissez-en un ou plusieurs, séparés par des virgules (ex. 1,3)" ;;
+    q_tc_ask)       en="Languages"
+                    fr="Langages" ;;
+    q_editor)       en="Which editors do you want?"
+                    fr="Quels éditeurs voulez-vous ?" ;;
+    ed_vscode)      en="Visual Studio Code  - full IDE, debugger, IntelliSense"
+                    fr="Visual Studio Code  - IDE complet, débogueur, IntelliSense" ;;
+    ed_kate)        en="Kate                - lightweight KDE editor"
+                    fr="Kate                - éditeur KDE léger" ;;
+    ed_vim)         en="Vim                 - terminal editor, always available"
+                    fr="Vim                 - éditeur en terminal, toujours disponible" ;;
+    ed_none)        en="0) None - I already have an editor"
+                    fr="0) Aucun - j'ai déjà un éditeur" ;;
+    q_editor_ask)   en="Editors"
+                    fr="Éditeurs" ;;
     q_yn)           en="%s (y/n)"
                     fr="%s (o/n)" ;;
-    q_reinstall)    en="gcc is already installed. Reinstall/repair anyway?"
-                    fr="gcc est déjà installé. Réinstaller/réparer quand même ?" ;;
+    q_reinstall)    en="%s is already installed. Reinstall/repair anyway?"
+                    fr="%s est déjà installé. Réinstaller/réparer quand même ?" ;;
+    e_badpick)      en="Unknown choice: %s"
+                    fr="Choix inconnu : %s" ;;
+    e_nopick)       en="Nothing selected - nothing to do."
+                    fr="Aucune sélection - rien à faire." ;;
 
     # -- steps ------------------------------------------------------------
-    s_check)        en="Checking for an existing toolchain"
-                    fr="Recherche d'une chaîne d'outils existante" ;;
-    s_install)      en="Installing the compiler toolchain"
-                    fr="Installation de la chaîne d'outils" ;;
-    s_skip)         en="Skipping installation"
-                    fr="Installation ignorée" ;;
-    s_vscode)       en="Installing Visual Studio Code"
-                    fr="Installation de Visual Studio Code" ;;
-    s_kate)         en="Installing Kate"
-                    fr="Installation de Kate" ;;
+    s_install_tc)   en="Installing %s"
+                    fr="Installation de %s" ;;
+    s_editors)      en="Installing editors"
+                    fr="Installation des éditeurs" ;;
     s_scaffold)     en="Creating the starter project"
                     fr="Création du projet de départ" ;;
     s_verify)       en="Verifying"
                     fr="Vérification" ;;
 
-    # -- toolchain --------------------------------------------------------
-    found)          en="Found: %s"
-                    fr="Trouvé : %s" ;;
-    no_gcc)         en="No gcc found - will install"
-                    fr="gcc introuvable - installation prévue" ;;
-    keeping)        en="Keeping the existing toolchain"
-                    fr="Conservation de la chaîne d'outils existante" ;;
+    # -- install ----------------------------------------------------------
+    already)        en="%s already installed (%s)"
+                    fr="%s est déjà installé (%s)" ;;
     installing)     en="Installing: %s"
                     fr="Installation : %s" ;;
-    tc_installed)   en="Compiler toolchain installed"
-                    fr="Chaîne d'outils installée" ;;
-    tc_failed)      en="Package installation failed. Check your network and package manager, then re-run."
-                    fr="Échec de l'installation des paquets. Vérifiez votre réseau et votre gestionnaire de paquets, puis relancez." ;;
-    vg_installing)  en="Installing valgrind (optional memory checker)"
-                    fr="Installation de valgrind (vérificateur mémoire optionnel)" ;;
-    vg_ok)          en="valgrind installed"
-                    fr="valgrind installé" ;;
+    tc_ok)          en="%s installed"
+                    fr="%s installé" ;;
+    tc_failed)      en="%s installation failed - continuing with the rest"
+                    fr="Échec de l'installation de %s - on continue" ;;
+    tc_unsupported) en="%s is not packaged for this system - skipping"
+                    fr="%s n'est pas disponible sur ce système - ignoré" ;;
+    keeping)        en="Keeping the existing installation"
+                    fr="Installation existante conservée" ;;
     vg_no)          en="valgrind unavailable on this system - skipping (not required)"
                     fr="valgrind indisponible sur ce système - ignoré (non requis)" ;;
     mac_clang)      en="On macOS, 'gcc' still runs Apple clang, not the GCC just installed."
                     fr="Sous macOS, 'gcc' lance toujours clang d'Apple, pas le GCC installé." ;;
     mac_real)       en="Real GCC is at: %s"
                     fr="Le vrai GCC se trouve ici : %s" ;;
-    mac_use)        en="Use it explicitly, e.g.  %s -std=%s main.c -o main"
-                    fr="Utilisez-le explicitement, ex.  %s -std=%s main.c -o main" ;;
     mac_fine)       en="For coursework, Apple clang accepts the same flags and is usually fine."
                     fr="Pour les TP, clang accepte les mêmes options et convient généralement." ;;
+    rustup_note)    en="Installing via rustup, the official Rust installer"
+                    fr="Installation via rustup, l'installateur officiel de Rust" ;;
+    rustup_path)    en="Open a new terminal, or run: source \$HOME/.cargo/env"
+                    fr="Ouvrez un nouveau terminal, ou lancez : source \$HOME/.cargo/env" ;;
+    dotnet_script)  en="Distro package unavailable - using the official dotnet-install script"
+                    fr="Paquet indisponible - utilisation du script officiel dotnet-install" ;;
 
     # -- editors ----------------------------------------------------------
-    vscode_have)    en="VS Code already installed (%s)"
-                    fr="VS Code est déjà installé (%s)" ;;
-    vscode_ok)      en="VS Code installed"
-                    fr="VS Code installé" ;;
-    vscode_fail)    en="VS Code install failed - continuing"
-                    fr="Échec de l'installation de VS Code - on continue" ;;
     ms_repo)        en="Adding the Microsoft package repository"
                     fr="Ajout du dépôt de paquets Microsoft" ;;
     key_fail)       en="Could not download the Microsoft signing key - skipping VS Code"
@@ -189,8 +213,8 @@ msg() {
                     fr="Votre configuration apt n'a pas été modifiée." ;;
     key_inst_fail)  en="Could not install the signing key - skipping VS Code"
                     fr="Impossible d'installer la clé de signature - VS Code ignoré" ;;
-    repo_rollback)  en="VS Code install failed - removing the repository entry again"
-                    fr="Échec de VS Code - suppression du dépôt ajouté" ;;
+    repo_rollback)  en="Install failed - removing the repository entry again"
+                    fr="Échec - suppression du dépôt ajouté" ;;
     mktemp_fail)    en="mktemp failed - skipping VS Code"
                     fr="Échec de mktemp - VS Code ignoré" ;;
     aur_warn)       en="VS Code on Arch comes from the AUR, which is community-maintained"
@@ -199,76 +223,50 @@ msg() {
                     fr="Les paquets AUR exécutent des scripts que ni Arch ni Microsoft n'ont validés." ;;
     aur_ask)        en="Install visual-studio-code-bin from the AUR?"
                     fr="Installer visual-studio-code-bin depuis l'AUR ?" ;;
-    aur_fail)       en="AUR install failed"
-                    fr="Échec de l'installation AUR" ;;
     aur_helper)     en="No AUR helper found. Install yay or paru, then: yay -S visual-studio-code-bin"
                     fr="Aucun assistant AUR. Installez yay ou paru, puis : yay -S visual-studio-code-bin" ;;
     aur_oss)        en="Or use the open-source build instead: sudo pacman -S code"
                     fr="Ou utilisez la version open source : sudo pacman -S code" ;;
     skipped)        en="Skipped"
                     fr="Ignoré" ;;
-    ext_check)      en="Ensuring the C/C++ extension is present"
-                    fr="Vérification de l'extension C/C++" ;;
-    ext_have)       en="Extension ms-vscode.cpptools already installed"
-                    fr="Extension ms-vscode.cpptools déjà installée" ;;
-    ext_ok)         en="Extension ms-vscode.cpptools installed"
-                    fr="Extension ms-vscode.cpptools installée" ;;
-    ext_fail)       en="Could not install the C/C++ extension automatically"
-                    fr="Impossible d'installer l'extension C/C++ automatiquement" ;;
+    ext_check)      en="Ensuring the language extensions are present"
+                    fr="Vérification des extensions de langage" ;;
+    ext_ok)         en="Extension %s installed"
+                    fr="Extension %s installée" ;;
+    ext_have)       en="Extension %s already installed"
+                    fr="Extension %s déjà installée" ;;
+    ext_fail)       en="Could not install extension %s"
+                    fr="Impossible d'installer l'extension %s" ;;
     wsl_gui)        en="Running under WSL - do not install the Linux GUI build here."
                     fr="Vous êtes sous WSL - n'installez pas la version graphique Linux ici." ;;
     wsl_win)        en="Install VS Code on WINDOWS instead:  https://code.visualstudio.com"
                     fr="Installez plutôt VS Code sous WINDOWS :  https://code.visualstudio.com" ;;
     wsl_ext)        en="Then add the extension:  ms-vscode-remote.remote-wsl"
                     fr="Puis ajoutez l'extension :  ms-vscode-remote.remote-wsl" ;;
-    wsl_code)       en="Afterwards, run 'code .' from this shell to open your project."
-                    fr="Ensuite, lancez 'code .' depuis ce terminal pour ouvrir votre projet." ;;
-    kate_have)      en="Kate already installed (%s)"
-                    fr="Kate est déjà installé (%s)" ;;
-    kate_ok)        en="Kate installed"
-                    fr="Kate installé" ;;
-    kate_fail)      en="Kate install failed - continuing"
-                    fr="Échec de l'installation de Kate - on continue" ;;
-    kate_installing) en="Installing Kate"
-                    fr="Installation de Kate" ;;
-    kate_nopath)    en="Kate did not end up on PATH - continuing without it"
-                    fr="Kate n'est pas dans le PATH - on continue sans lui" ;;
     kate_wslg)      en="Kate is a GUI app and needs WSLg to display under WSL."
                     fr="Kate est une application graphique et nécessite WSLg sous WSL." ;;
-    kate_wslg2)     en="On Windows 11 this works out of the box; on older builds it will not."
-                    fr="Sous Windows 11 cela fonctionne directement ; pas sur les versions plus anciennes." ;;
     kate_wslg_ask)  en="Install Kate inside WSL anyway?"
                     fr="Installer Kate dans WSL malgré tout ?" ;;
-    kate_wslg_skip) en="Skipped - consider installing Kate on Windows instead."
-                    fr="Ignoré - envisagez d'installer Kate sous Windows." ;;
-    clangd_have)    en="clangd already installed"
-                    fr="clangd est déjà installé" ;;
-    clangd_inst)    en="Installing %s for Kate code completion"
-                    fr="Installation de %s pour la complétion dans Kate" ;;
     clangd_ok)      en="clangd installed - enable the LSP Client plugin in Kate"
                     fr="clangd installé - activez le plugin LSP Client dans Kate" ;;
     clangd_no)      en="clangd unavailable - Kate still works, just without completion"
                     fr="clangd indisponible - Kate fonctionne, mais sans complétion" ;;
+    vimrc_ok)       en="Wrote a starter ~/.vimrc (syntax, indentation, line numbers)"
+                    fr="Fichier ~/.vimrc de départ créé (syntaxe, indentation, numéros)" ;;
+    vimrc_kept)     en="You already have a ~/.vimrc - left untouched"
+                    fr="Vous avez déjà un ~/.vimrc - laissé intact" ;;
 
     # -- verification -----------------------------------------------------
-    v_nogcc)        en="gcc is not on PATH after installation."
-                    fr="gcc n'est pas dans le PATH après l'installation." ;;
-    v_cfail)        en="Verification compile failed under -std=%s."
-                    fr="Échec de la compilation de vérification avec -std=%s." ;;
-    v_badout)       en="Verification binary produced unexpected output."
-                    fr="Le programme de vérification a produit une sortie inattendue." ;;
-    v_cok)          en="Compiled and ran a C program using -std=%s"
-                    fr="Programme C compilé et exécuté avec -std=%s" ;;
-    v_comments)     en="Both /* */ and // comment styles accepted"
-                    fr="Les commentaires /* */ et // sont tous deux acceptés" ;;
-    v_nogpp)        en="g++ not found - skipping the C++ check"
-                    fr="g++ introuvable - vérification C++ ignorée" ;;
-    v_nogpp2)       en="You chose a C++ profile, so re-run and allow the install to repair it."
-                    fr="Vous avez choisi un profil C++ : relancez et autorisez la réparation." ;;
-    v_cppok)        en="C++ toolchain verified (-std=c++17)"
-                    fr="Chaîne d'outils C++ vérifiée (-std=c++17)" ;;
-    v_cppfail)      en="C++ verification failed"
-                    fr="Échec de la vérification C++" ;;
+    v_missing)      en="%s is not on PATH after installation"
+                    fr="%s n'est pas dans le PATH après l'installation" ;;
+    v_ok)           en="%s works"
+                    fr="%s fonctionne" ;;
+    v_fail)         en="%s failed its check"
+                    fr="%s a échoué à sa vérification" ;;
+    v_comments)     en="Both /* */ and // comment styles accepted (-std=%s)"
+                    fr="Les commentaires /* */ et // sont acceptés (-std=%s)" ;;
+    v_newshell)     en="%s needs a new terminal before it is on PATH"
+                    fr="%s nécessite un nouveau terminal pour être dans le PATH" ;;
 
     # -- scaffold ---------------------------------------------------------
     sc_kept)        en="Kept existing %s"
@@ -299,18 +297,16 @@ msg() {
                     fr="Installez-le d'abord (une ligne, depuis https://brew.sh) :" ;;
     e_rerun)        en="Then re-run this script."
                     fr="Puis relancez ce script." ;;
-    e_profile)      en="Unknown profile '%s' (expected c, cpp or full)"
-                    fr="Profil inconnu '%s' (attendu : c, cpp ou full)" ;;
-    e_editor)       en="Unknown editor '%s' (expected vscode, kate, both or none)"
-                    fr="Éditeur inconnu '%s' (attendu : vscode, kate, both ou none)" ;;
     e_pm)           en="Unknown package manager: %s"
                     fr="Gestionnaire de paquets inconnu : %s" ;;
 
     # -- summary ----------------------------------------------------------
     done_title)     en="Installation complete"
                     fr="Installation terminée" ;;
-    compile_run)    en="Compile and run:"
-                    fr="Compiler et exécuter :" ;;
+    summary)        en="What you have now:"
+                    fr="Ce dont vous disposez :" ;;
+    reopen)         en="Open a NEW terminal before using the new tools."
+                    fr="Ouvrez un NOUVEAU terminal avant d'utiliser les nouveaux outils." ;;
     *)              en="$key"; fr="$key" ;;
     esac
 
@@ -357,9 +353,9 @@ trap cleanup_work EXIT
 
 banner() {
     printf '\n'
-    printf '%s  ===========================================%s\n' "$C_CYAN" "$C_RESET"
-    printf '%s   %s%s\n' "$C_CYAN" "$(msg title)" "$C_RESET"
-    printf '%s  ===========================================%s\n' "$C_CYAN" "$C_RESET"
+    printf '%s  =============================================%s\n' "$C_CYAN" "$C_RESET"
+    printf '%s   cready -- %s%s\n' "$C_CYAN" "$(msg title)" "$C_RESET"
+    printf '%s  =============================================%s\n' "$C_CYAN" "$C_RESET"
     printf '\n'
     printf '   %s\n' "$(msg built_for)"
     printf '   %s\n' "$(msg built_for2)"
@@ -399,11 +395,17 @@ ask() {
     printf '%s' "$reply"
 }
 
+# confirm <prompt> [default]
+# Accepts o/O for "oui" as well as y/Y, so a French prompt behaves.
 confirm() {
-    # confirm <prompt>  -> returns 0 for yes
-    # Accepts o/O for "oui" as well as y/Y, so a French prompt behaves.
-    local answer
-    answer="$(ask "$(msg q_yn "$1")" "$([ "$CBOOT_LANG" = 'fr' ] && printf 'o' || printf 'y')")"
+    local want_no=0 default answer
+    [ "${2:-yes}" = 'no' ] && want_no=1
+    if [ "$want_no" = 1 ]; then
+        default="$([ "$CBOOT_LANG" = 'fr' ] && printf 'n' || printf 'n')"
+    else
+        default="$([ "$CBOOT_LANG" = 'fr' ] && printf 'o' || printf 'y')"
+    fi
+    answer="$(ask "$(msg q_yn "$1")" "$default")"
     case "$answer" in
         [YyOo]*) return 0 ;;
         *)       return 1 ;;
@@ -417,7 +419,6 @@ choose_language() {
         printf 'fr'
         return
     fi
-
     {
         printf '\n'
         printf '   +---------------------------------------+\n'
@@ -426,35 +427,107 @@ choose_language() {
         printf '     1) Francais   (par defaut / default)\n'
         printf '     2) English\n\n'
     } >&2
-
     case "$(ask 'Choisissez / Choose' '1')" in
         2) printf 'en' ;;
         *) printf 'fr' ;;
     esac
 }
 
-# Which editor(s) to set up. Only asked when the chosen profile includes one.
-choose_editor() {
-    if [ -n "$CBOOT_EDITOR" ]; then
-        printf '%s' "$CBOOT_EDITOR"
+# Turns "1,3" or "1 3" into a space-separated list of ids drawn from $2.
+# Prints nothing and returns 1 when a number is out of range.
+map_choice() {
+    local input="$1" ids="$2" out='' n id i
+    input="$(printf '%s' "$input" | tr ',' ' ')"
+    for n in $input; do
+        case "$n" in
+            ''|*[!0-9]*) printf '%s' "$n"; return 1 ;;
+        esac
+        i=1
+        id=''
+        for candidate in $ids; do
+            if [ "$i" -eq "$n" ]; then id="$candidate"; break; fi
+            i=$((i + 1))
+        done
+        [ -z "$id" ] && { printf '%s' "$n"; return 1; }
+        case " $out " in
+            *" $id "*) ;;            # already picked, ignore duplicates
+            *) out="$out $id" ;;
+        esac
+    done
+    printf '%s' "${out# }"
+    return 0
+}
+
+choose_toolchains() {
+    if [ -n "$CBOOT_TOOLCHAINS" ]; then
+        printf '%s' "$(printf '%s' "$CBOOT_TOOLCHAINS" | tr ',' ' ')"
+        return
+    fi
+    if ! can_prompt; then
+        printf 'cpp'
         return
     fi
 
     {
         printf '\n'
-        printf '   %s\n\n' "$(msg q_editor)"
-        printf '   %s\n' "$(msg q_editor_1)"
-        printf '   %s\n' "$(msg q_editor_2)"
-        printf '   %s\n' "$(msg q_editor_3)"
-        printf '   %s\n\n' "$(msg q_editor_4)"
+        printf '   %s\n' "$(msg q_tc)"
+        printf '   %s%s%s\n\n' "$C_DIM" "$(msg q_multi)" "$C_RESET"
+        printf '     1) %s\n' "$(msg tc_cpp)"
+        printf '     2) %s\n' "$(msg tc_dotnet)"
+        printf '     3) %s\n' "$(msg tc_rust)"
+        printf '     4) %s\n' "$(msg tc_go)"
+        printf '     5) %s\n' "$(msg tc_python)"
+        printf '     6) %s\n\n' "$(msg tc_java)"
     } >&2
 
-    case "$(ask "$(msg q_choose_1234)" '1')" in
-        2) printf 'kate' ;;
-        3) printf 'both' ;;
-        4) printf 'none' ;;
-        *) printf 'vscode' ;;
-    esac
+    local picked bad
+    while : ; do
+        picked="$(ask "$(msg q_tc_ask)" '1')"
+        if bad="$(map_choice "$picked" "$ALL_TOOLCHAINS")"; then
+            printf '%s' "$bad"
+            return
+        fi
+        printf '      %s\n' "$(msg e_badpick "$bad")" >&2
+        can_prompt || { printf 'cpp'; return; }
+    done
+}
+
+choose_editors() {
+    if [ -n "$CBOOT_EDITOR" ]; then
+        case "$CBOOT_EDITOR" in
+            none) printf '' ;;
+            *)    printf '%s' "$(printf '%s' "$CBOOT_EDITOR" | tr ',' ' ')" ;;
+        esac
+        return
+    fi
+    if ! can_prompt; then
+        printf ''
+        return
+    fi
+
+    {
+        printf '\n'
+        printf '   %s\n' "$(msg q_editor)"
+        printf '   %s%s%s\n\n' "$C_DIM" "$(msg q_multi)" "$C_RESET"
+        printf '     1) %s\n' "$(msg ed_vscode)"
+        printf '     2) %s\n' "$(msg ed_kate)"
+        printf '     3) %s\n' "$(msg ed_vim)"
+        printf '     %s\n\n' "$(msg ed_none)"
+    } >&2
+
+    local picked bad
+    while : ; do
+        picked="$(ask "$(msg q_editor_ask)" '1')"
+        case "$picked" in
+            0) printf ''; return ;;
+        esac
+        if bad="$(map_choice "$picked" "$ALL_EDITORS")"; then
+            printf '%s' "$bad"
+            return
+        fi
+        printf '      %s\n' "$(msg e_badpick "$bad")" >&2
+        can_prompt || { printf ''; return; }
+    done
 }
 
 # --------------------------------------------------------------------------
@@ -541,7 +614,6 @@ detect_platform() {
 # --------------------------------------------------------------------------
 
 pm_install() {
-    # pm_install <packages...>
     case "$PKG" in
         apt)
             $SUDO apt-get update -qq
@@ -563,73 +635,287 @@ pm_install() {
     esac
 }
 
-install_toolchain() {
-    local want_cpp="$1" pkgs=()
+# --------------------------------------------------------------------------
+# Toolchain registry
+#
+# Four small functions keyed by toolchain id keep everything about a language
+# in one place: its display name, its packages, how to detect it, and how to
+# prove it works.
+# --------------------------------------------------------------------------
 
-    case "$PKG" in
-        apt)
-            # build-essential pulls gcc, g++, make and libc headers together.
-            pkgs=(build-essential gdb)
+tc_label() {
+    case "$1" in
+        cpp)    printf 'C / C++' ;;
+        dotnet) printf 'C# (.NET)' ;;
+        rust)   printf 'Rust' ;;
+        go)     printf 'Go' ;;
+        python) printf 'Python' ;;
+        java)   printf 'Java' ;;
+        *)      printf '%s' "$1" ;;
+    esac
+}
+
+# The command that proves a toolchain is present.
+tc_probe() {
+    case "$1" in
+        cpp)    printf 'gcc' ;;
+        dotnet) printf 'dotnet' ;;
+        rust)   printf 'rustc' ;;
+        go)     printf 'go' ;;
+        python) printf 'python3' ;;
+        java)   printf 'javac' ;;
+    esac
+}
+
+# Packages for the active package manager. Empty output means "no package
+# mapping", which the caller reports as unsupported rather than failing.
+tc_packages() {
+    case "$1:$PKG" in
+        cpp:apt)        printf 'build-essential gdb' ;;
+        cpp:dnf|cpp:yum) printf 'gcc gcc-c++ make gdb glibc-devel' ;;
+        cpp:pacman)     printf 'base-devel gdb' ;;
+        cpp:zypper)     printf 'gcc gcc-c++ make gdb glibc-devel' ;;
+        cpp:apk)        printf 'build-base gdb' ;;
+        cpp:brew)       printf 'gcc make' ;;
+
+        dotnet:apt)     printf 'dotnet-sdk-8.0' ;;
+        dotnet:dnf|dotnet:yum) printf 'dotnet-sdk-8.0' ;;
+        dotnet:pacman)  printf 'dotnet-sdk' ;;
+        dotnet:zypper)  printf 'dotnet-sdk-8.0' ;;
+        dotnet:apk)     printf 'dotnet8-sdk' ;;
+        dotnet:brew)    printf '' ;;   # cask, handled specially
+
+        go:apt)         printf 'golang-go' ;;
+        go:dnf|go:yum)  printf 'golang' ;;
+        go:pacman)      printf 'go' ;;
+        go:zypper)      printf 'go' ;;
+        go:apk)         printf 'go' ;;
+        go:brew)        printf 'go' ;;
+
+        python:apt)     printf 'python3 python3-pip python3-venv' ;;
+        python:dnf|python:yum) printf 'python3 python3-pip' ;;
+        python:pacman)  printf 'python python-pip' ;;
+        python:zypper)  printf 'python3 python3-pip' ;;
+        python:apk)     printf 'python3 py3-pip' ;;
+        python:brew)    printf 'python' ;;
+
+        java:apt)       printf 'default-jdk' ;;
+        java:dnf|java:yum) printf 'java-latest-openjdk-devel' ;;
+        java:pacman)    printf 'jdk-openjdk' ;;
+        java:zypper)    printf 'java-17-openjdk-devel' ;;
+        java:apk)       printf 'openjdk17' ;;
+        java:brew)      printf 'openjdk' ;;
+
+        # rust intentionally has no distro packages: rustup is the supported
+        # route and is what every Rust tutorial assumes.
+        rust:*)         printf '' ;;
+        *)              printf '' ;;
+    esac
+}
+
+install_toolchain() {
+    local id="$1" label packages probe
+    label="$(tc_label "$id")"
+    probe="$(tc_probe "$id")"
+
+    if command -v "$probe" >/dev/null 2>&1; then
+        ok "$(msg already "$label" "$(command -v "$probe")")"
+        if ! confirm "$(msg q_reinstall "$label")" no; then
+            note "$(msg keeping)"
+            return 0
+        fi
+    fi
+
+    case "$id" in
+        rust)
+            note "$(msg rustup_note)"
+            if ! curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                 | sh -s -- -y --no-modify-path >/dev/null 2>&1; then
+                warn "$(msg tc_failed "$label")"
+                return 1
+            fi
+            # rustup installs into ~/.cargo/bin, which is not on PATH until a
+            # new shell reads the profile it just edited.
+            [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+            export PATH="$HOME/.cargo/bin:$PATH"
+            ok "$(msg tc_ok "$label")"
+            note "$(msg rustup_path)"
+            return 0
             ;;
-        dnf|yum)
-            pkgs=(gcc make gdb glibc-devel)
-            [ "$want_cpp" = "1" ] && pkgs+=(gcc-c++)
-            ;;
-        pacman)
-            pkgs=(base-devel gdb)
-            ;;
-        zypper)
-            pkgs=(gcc make gdb glibc-devel)
-            [ "$want_cpp" = "1" ] && pkgs+=(gcc-c++)
-            ;;
-        apk)
-            pkgs=(build-base gdb)
-            ;;
-        brew)
-            pkgs=(gcc make)
+        dotnet)
+            if [ "$PKG" = 'brew' ]; then
+                brew install --cask dotnet-sdk || { warn "$(msg tc_failed "$label")"; return 1; }
+                ok "$(msg tc_ok "$label")"
+                return 0
+            fi
+            packages="$(tc_packages "$id")"
+            if [ -n "$packages" ] && pm_install $packages; then
+                ok "$(msg tc_ok "$label")"
+                return 0
+            fi
+            # Distro packaging for .NET is inconsistent across versions, so
+            # fall back to Microsoft's own installer rather than giving up.
+            note "$(msg dotnet_script)"
+            if curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+               && bash /tmp/dotnet-install.sh --channel LTS --install-dir "$HOME/.dotnet" >/dev/null 2>&1; then
+                rm -f /tmp/dotnet-install.sh
+                export PATH="$HOME/.dotnet:$PATH"
+                ok "$(msg tc_ok "$label")"
+                note "$(msg v_newshell "$label")"
+                return 0
+            fi
+            rm -f /tmp/dotnet-install.sh
+            warn "$(msg tc_failed "$label")"
+            return 1
             ;;
     esac
 
-    note "$(msg installing "${pkgs[*]}")"
-    if ! pm_install "${pkgs[@]}"; then
-        die "$(msg tc_failed)"
-    fi
-    ok "$(msg tc_installed)"
-
-    # Homebrew deliberately does not symlink an unversioned gcc, so `gcc` keeps
-    # resolving to Apple's clang wrapper. Say so plainly instead of reporting a
-    # GCC install that the student will never actually invoke.
-    if [ "$PKG" = 'brew' ]; then
-        local real_gcc
-        real_gcc="$(ls "$(brew --prefix 2>/dev/null)/bin"/gcc-[0-9]* 2>/dev/null | sort -V | tail -1)"
-        if [ -n "$real_gcc" ]; then
-            warn "$(msg mac_clang)"
-            note "$(msg mac_real "$real_gcc")"
-            note "$(msg mac_use "$(basename "$real_gcc")" "$CBOOT_STD")"
-            note "$(msg mac_fine)"
-        fi
+    packages="$(tc_packages "$id")"
+    if [ -z "$packages" ]; then
+        warn "$(msg tc_unsupported "$label")"
+        return 1
     fi
 
-    # valgrind is standard in French university C courses for memory debugging,
-    # but it is unavailable on some distros/architectures -- never fatal.
-    if [ "$PKG" != 'brew' ]; then
-        note "$(msg vg_installing)"
-        if pm_install valgrind >/dev/null 2>&1; then
-            ok "$(msg vg_ok)"
-        else
-            warn "$(msg vg_no)"
+    note "$(msg installing "$packages")"
+    if ! pm_install $packages; then
+        warn "$(msg tc_failed "$label")"
+        return 1
+    fi
+    ok "$(msg tc_ok "$label")"
+
+    if [ "$id" = 'cpp' ]; then
+        # valgrind is standard in French university C courses, but it is
+        # unavailable on some distros and architectures -- never fatal.
+        if [ "$PKG" != 'brew' ] && ! command -v valgrind >/dev/null 2>&1; then
+            pm_install valgrind >/dev/null 2>&1 || warn "$(msg vg_no)"
+        fi
+        # Homebrew deliberately does not symlink an unversioned gcc, so `gcc`
+        # keeps resolving to Apple's clang wrapper. Say so plainly.
+        if [ "$PKG" = 'brew' ]; then
+            local real_gcc
+            real_gcc="$(ls "$(brew --prefix 2>/dev/null)/bin"/gcc-[0-9]* 2>/dev/null | sort -V | tail -1)"
+            if [ -n "$real_gcc" ]; then
+                warn "$(msg mac_clang)"
+                note "$(msg mac_real "$real_gcc")"
+                note "$(msg mac_fine)"
+            fi
         fi
     fi
+    return 0
 }
 
 # --------------------------------------------------------------------------
-# Visual Studio Code
+# Verification
+#
+# Each toolchain compiles and runs a real program. Nothing is reported as
+# working on the strength of a version string alone, except .NET, whose
+# project scaffolding is too slow to justify in an installer.
+# --------------------------------------------------------------------------
+
+verify_toolchain() {
+    local id="$1" label probe
+    label="$(tc_label "$id")"
+    probe="$(tc_probe "$id")"
+
+    if ! command -v "$probe" >/dev/null 2>&1; then
+        warn "$(msg v_missing "$label")"
+        return 1
+    fi
+
+    CBOOT_WORK="$(mktemp -d)"
+    local w="$CBOOT_WORK" rc=0
+
+    case "$id" in
+        cpp)
+            # Mixes ANSI block comments with // line comments, so a pass proves
+            # the configured standard accepts both styles.
+            cat > "$w/v.c" <<'EOF'
+#include <stdio.h>
+/* ANSI C style block comment */
+int main(void)
+{
+    int value = 42;   // line comment - rejected by strict c89
+    printf("OK %d\n", value);
+    return 0;
+}
+EOF
+            if gcc -std="$CBOOT_STD" -Wall -Wextra "$w/v.c" -o "$w/v" 2>/dev/null \
+               && "$w/v" | grep -q 'OK 42'; then
+                ok "$(msg v_ok "C")"
+                ok "$(msg v_comments "$CBOOT_STD")"
+            else
+                warn "$(msg v_fail "C")"; rc=1
+            fi
+
+            if command -v g++ >/dev/null 2>&1; then
+                cat > "$w/v.cpp" <<'EOF'
+#include <iostream>
+#include <vector>
+int main() { std::vector<int> v{1,2,3}; for (int i : v) std::cout << i; std::cout << " OK\n"; }
+EOF
+                if g++ -std=c++17 "$w/v.cpp" -o "$w/vpp" 2>/dev/null && "$w/vpp" | grep -q 'OK'; then
+                    ok "$(msg v_ok "C++")"
+                else
+                    warn "$(msg v_fail "C++")"; rc=1
+                fi
+            fi
+            ;;
+        rust)
+            printf 'fn main() { println!("OK"); }\n' > "$w/v.rs"
+            if (cd "$w" && rustc v.rs -o v 2>/dev/null) && "$w/v" | grep -q 'OK'; then
+                ok "$(msg v_ok "$label")"
+            else
+                warn "$(msg v_fail "$label")"; rc=1
+            fi
+            ;;
+        go)
+            printf 'package main\nimport "fmt"\nfunc main() { fmt.Println("OK") }\n' > "$w/v.go"
+            if (cd "$w" && GOCACHE="$w/.cache" go run v.go 2>/dev/null | grep -q 'OK'); then
+                ok "$(msg v_ok "$label")"
+            else
+                warn "$(msg v_fail "$label")"; rc=1
+            fi
+            ;;
+        python)
+            if python3 -c 'print("OK")' 2>/dev/null | grep -q 'OK'; then
+                ok "$(msg v_ok "$label")"
+            else
+                warn "$(msg v_fail "$label")"; rc=1
+            fi
+            ;;
+        java)
+            cat > "$w/Hello.java" <<'EOF'
+public class Hello { public static void main(String[] a) { System.out.println("OK"); } }
+EOF
+            if (cd "$w" && javac Hello.java 2>/dev/null && java Hello 2>/dev/null | grep -q 'OK'); then
+                ok "$(msg v_ok "$label")"
+            else
+                warn "$(msg v_fail "$label")"; rc=1
+            fi
+            ;;
+        dotnet)
+            # `dotnet new` + build costs tens of seconds on first run, so this
+            # checks the SDK is registered rather than building a project.
+            if dotnet --list-sdks 2>/dev/null | grep -q '.'; then
+                ok "$(msg v_ok "$label")"
+            else
+                warn "$(msg v_fail "$label")"; rc=1
+            fi
+            ;;
+    esac
+
+    cleanup_work
+    return $rc
+}
+
+# --------------------------------------------------------------------------
+# Editors
 # --------------------------------------------------------------------------
 
 install_vscode() {
     if command -v code >/dev/null 2>&1; then
-        ok "$(msg vscode_have "$(command -v code)")"
-        install_cpp_extension
+        ok "$(msg already "VS Code" "$(command -v code)")"
+        install_vscode_extensions
         return
     fi
 
@@ -640,7 +926,6 @@ install_vscode() {
         warn "$(msg wsl_gui)"
         note "$(msg wsl_win)"
         note "$(msg wsl_ext)"
-        note "$(msg wsl_code)"
         return
     fi
 
@@ -657,21 +942,14 @@ install_vscode() {
             keyfile="$(mktemp)" || { warn "$(msg mktemp_fail)"; return; }
 
             # Every step is checked. A half-written key plus a live sources.list
-            # entry would break `apt update` system-wide for the student, long
-            # after this script has exited.
+            # entry would break `apt update` system-wide, long after this exits.
             if ! wget -qO- https://packages.microsoft.com/keys/microsoft.asc \
                  | gpg --dearmor -o "$keyfile" 2>/dev/null || [ ! -s "$keyfile" ]; then
-                rm -f "$keyfile"
-                warn "$(msg key_fail)"
-                note "$(msg key_untouched)"
-                return
+                rm -f "$keyfile"; warn "$(msg key_fail)"; note "$(msg key_untouched)"; return
             fi
-
             if ! $SUDO install -D -o root -g root -m 644 \
                  "$keyfile" /etc/apt/keyrings/packages.microsoft.gpg; then
-                rm -f "$keyfile"
-                warn "$(msg key_inst_fail)"
-                return
+                rm -f "$keyfile"; warn "$(msg key_inst_fail)"; return
             fi
             rm -f "$keyfile"
 
@@ -679,7 +957,6 @@ install_vscode() {
                 | $SUDO tee /etc/apt/sources.list.d/vscode.list > /dev/null
 
             if ! pm_install code; then
-                # Roll back rather than leaving a repo that breaks apt update.
                 warn "$(msg repo_rollback)"
                 $SUDO rm -f /etc/apt/sources.list.d/vscode.list \
                             /etc/apt/keyrings/packages.microsoft.gpg
@@ -688,79 +965,73 @@ install_vscode() {
             ;;
         dnf|yum|zypper)
             note "$(msg ms_repo)"
-            if ! $SUDO rpm --import https://packages.microsoft.com/keys/microsoft.asc; then
-                warn "$(msg key_inst_fail)"
-                return
-            fi
-
+            $SUDO rpm --import https://packages.microsoft.com/keys/microsoft.asc \
+                || { warn "$(msg key_inst_fail)"; return; }
             # zypper reads /etc/zypp/repos.d; only dnf/yum use /etc/yum.repos.d.
             local repofile='/etc/yum.repos.d/vscode.repo'
             [ "$PKG" = 'zypper' ] && repofile='/etc/zypp/repos.d/vscode.repo'
-
             printf '[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\nautorefresh=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc\n' \
                 | $SUDO tee "$repofile" > /dev/null
-
             if ! pm_install code; then
-                warn "$(msg repo_rollback)"
-                $SUDO rm -f "$repofile"
-                return
+                warn "$(msg repo_rollback)"; $SUDO rm -f "$repofile"; return
             fi
             ;;
         pacman)
-            # VS Code proper is not in the Arch repos (only the OSS build).
-            # AUR packages are community-maintained and run arbitrary build
-            # scripts, so this is never done unattended.
+            # VS Code proper is not in the Arch repos (only the OSS build), and
+            # AUR packages run arbitrary build scripts, so never unattended.
             warn "$(msg aur_warn)"
             note "$(msg aur_note)"
             if command -v yay >/dev/null 2>&1; then
-                confirm "$(msg aur_ask)" \
-                    && { yay -S visual-studio-code-bin || warn "$(msg aur_fail)"; } \
-                    || { note "$(msg skipped)"; return; }
+                confirm "$(msg aur_ask)" && yay -S visual-studio-code-bin || { note "$(msg skipped)"; return; }
             elif command -v paru >/dev/null 2>&1; then
-                confirm "$(msg aur_ask)" \
-                    && { paru -S visual-studio-code-bin || warn "$(msg aur_fail)"; } \
-                    || { note "$(msg skipped)"; return; }
+                confirm "$(msg aur_ask)" && paru -S visual-studio-code-bin || { note "$(msg skipped)"; return; }
             else
-                note "$(msg aur_helper)"
-                note "$(msg aur_oss)"
-                return
+                note "$(msg aur_helper)"; note "$(msg aur_oss)"; return
             fi
             ;;
         apk)
-            warn 'VS Code is not packaged for Alpine - install it manually if needed.'
-            return
-            ;;
+            warn "$(msg tc_unsupported 'VS Code')"; return ;;
         brew)
-            brew install --cask visual-studio-code || { warn "$(msg vscode_fail)"; return; }
+            brew install --cask visual-studio-code || { warn "$(msg tc_failed 'VS Code')"; return; }
             ;;
     esac
 
     if command -v code >/dev/null 2>&1; then
-        ok "$(msg vscode_ok)"
-        install_cpp_extension
+        ok "$(msg tc_ok 'VS Code')"
+        install_vscode_extensions
     else
-        warn "$(msg vscode_fail)"
+        warn "$(msg tc_failed 'VS Code')"
     fi
 }
 
-install_cpp_extension() {
+# Extensions follow the languages that were actually installed, so a Python-only
+# setup does not drag in the C/C++ toolset and vice versa.
+install_vscode_extensions() {
+    local ext id
     note "$(msg ext_check)"
-    if code --list-extensions 2>/dev/null | grep -qx 'ms-vscode.cpptools'; then
-        ok "$(msg ext_have)"
-    elif code --install-extension ms-vscode.cpptools --force >/dev/null 2>&1; then
-        ok "$(msg ext_ok)"
-    else
-        warn "$(msg ext_fail)"
-    fi
+    for id in $SELECTED_TOOLCHAINS; do
+        case "$id" in
+            cpp)    ext='ms-vscode.cpptools' ;;
+            dotnet) ext='ms-dotnettools.csharp' ;;
+            rust)   ext='rust-lang.rust-analyzer' ;;
+            go)     ext='golang.go' ;;
+            python) ext='ms-python.python' ;;
+            java)   ext='redhat.java' ;;
+            *)      continue ;;
+        esac
+        if code --list-extensions 2>/dev/null | grep -qx "$ext"; then
+            ok "$(msg ext_have "$ext")"
+        elif code --install-extension "$ext" --force >/dev/null 2>&1; then
+            ok "$(msg ext_ok "$ext")"
+        else
+            warn "$(msg ext_fail "$ext")"
+        fi
+    done
 }
-
-# --------------------------------------------------------------------------
-# Kate
-# --------------------------------------------------------------------------
 
 install_kate() {
     if command -v kate >/dev/null 2>&1; then
-        ok "$(msg kate_have "$(command -v kate)")"
+        ok "$(msg already 'Kate' "$(command -v kate)")"
         install_clangd
         return
     fi
@@ -769,36 +1040,28 @@ install_kate() {
     # recent Windows 10); without it the install succeeds but nothing renders.
     if [ "$IS_WSL" = "1" ]; then
         warn "$(msg kate_wslg)"
-        note "$(msg kate_wslg2)"
-        if ! confirm "$(msg kate_wslg_ask)"; then
-            note "$(msg kate_wslg_skip)"
-            return
-        fi
+        confirm "$(msg kate_wslg_ask)" || { note "$(msg skipped)"; return; }
     fi
 
-    note "$(msg kate_installing)"
     if [ "$PKG" = 'brew' ]; then
-        brew install --cask kate || { warn "$(msg kate_fail)"; return; }
+        brew install --cask kate || { warn "$(msg tc_failed 'Kate')"; return; }
     elif ! pm_install kate; then
-        warn "$(msg kate_fail)"
-        return
+        warn "$(msg tc_failed 'Kate')"; return
     fi
 
     if command -v kate >/dev/null 2>&1; then
-        ok "$(msg kate_ok)"
+        ok "$(msg tc_ok 'Kate')"
         install_clangd
     else
-        warn "$(msg kate_nopath)"
+        warn "$(msg tc_failed 'Kate')"
     fi
 }
 
 # Kate has no built-in C parser; its LSP plugin drives clangd. Best-effort
-# only, since Kate is still a usable editor without it.
+# only, and only worth installing when a C/C++ toolchain was selected.
 install_clangd() {
-    if command -v clangd >/dev/null 2>&1; then
-        ok "$(msg clangd_have)"
-        return
-    fi
+    case " $SELECTED_TOOLCHAINS " in *" cpp "*) ;; *) return ;; esac
+    command -v clangd >/dev/null 2>&1 && { ok "$(msg already 'clangd' "$(command -v clangd)")"; return; }
 
     local pkg='clangd'
     case "$PKG" in
@@ -808,8 +1071,6 @@ install_clangd() {
         apk)      pkg='clang-extra-tools' ;;
         brew)     pkg='llvm' ;;
     esac
-
-    note "$(msg clangd_inst "$pkg")"
     if pm_install "$pkg" >/dev/null 2>&1 && command -v clangd >/dev/null 2>&1; then
         ok "$(msg clangd_ok)"
     else
@@ -817,70 +1078,67 @@ install_clangd() {
     fi
 }
 
-# --------------------------------------------------------------------------
-# Verification
-# --------------------------------------------------------------------------
-
-verify_toolchain() {
-    local want_cpp="$1" work
-    CBOOT_WORK="$(mktemp -d)"
-    work="$CBOOT_WORK"
-
-    command -v gcc >/dev/null 2>&1 || die "$(msg v_nogcc)"
-
-    # Mixes ANSI block comments with // line comments, so a pass proves the
-    # configured standard accepts both styles.
-    cat > "$work/verify.c" <<'CSRC'
-#include <stdio.h>
-
-/* ANSI C style block comment */
-int main(void)
-{
-    int value = 42;   // line comment - rejected by strict c89
-    printf("TOOLCHAIN_OK %d\n", value);
-    return 0;
-}
-CSRC
-
-    if ! gcc -std="$CBOOT_STD" -Wall -Wextra "$work/verify.c" -o "$work/verify"; then
-        die "$(msg v_cfail "$CBOOT_STD")"
-    fi
-    if ! "$work/verify" | grep -q 'TOOLCHAIN_OK 42'; then
-        die "$(msg v_badout)"
-    fi
-    ok "$(msg v_cok "$CBOOT_STD")"
-    ok "$(msg v_comments)"
-
-    if [ "$want_cpp" = "1" ] && ! command -v g++ >/dev/null 2>&1; then
-        warn "$(msg v_nogpp)"
-        note "$(msg v_nogpp2)"
-        cleanup_work
-        return 0
-    fi
-
-    if [ "$want_cpp" = "1" ]; then
-        cat > "$work/verify.cpp" <<'CPPSRC'
-#include <iostream>
-#include <vector>
-int main() {
-    std::vector<int> v{1, 2, 3};
-    for (int i : v) std::cout << i;
-    std::cout << " CPP_OK\n";
-}
-CPPSRC
-        if g++ -std=c++17 "$work/verify.cpp" -o "$work/verifycpp" \
-           && "$work/verifycpp" | grep -q 'CPP_OK'; then
-            ok "$(msg v_cppok)"
-        else
-            warn "$(msg v_cppfail)"
+install_vim() {
+    if command -v vim >/dev/null 2>&1; then
+        ok "$(msg already 'Vim' "$(command -v vim)")"
+    else
+        if [ "$PKG" = 'brew' ]; then
+            brew install vim || { warn "$(msg tc_failed 'Vim')"; return; }
+        elif ! pm_install vim; then
+            warn "$(msg tc_failed 'Vim')"; return
         fi
+        command -v vim >/dev/null 2>&1 && ok "$(msg tc_ok 'Vim')" || { warn "$(msg tc_failed 'Vim')"; return; }
     fi
+    write_vimrc
+}
 
-    cleanup_work
+# A stock vim has no syntax highlighting and 8-wide tabs, which is a rough
+# first impression. Only ever written when the user has no vimrc at all.
+write_vimrc() {
+    local rc="$HOME/.vimrc"
+    if [ -e "$rc" ]; then
+        note "$(msg vimrc_kept)"
+        return
+    fi
+    cat > "$rc" <<'VIMRC'
+" Starter configuration written by cready. Edit freely.
+syntax on
+filetype plugin indent on
+
+set number
+set tabstop=4
+set shiftwidth=4
+set expandtab
+set autoindent
+set smartindent
+
+set incsearch
+set hlsearch
+set ignorecase
+set smartcase
+
+set ruler
+set showcmd
+set wildmenu
+set backspace=indent,eol,start
+set encoding=utf-8
+
+" F5 builds and runs the current C file with the same flags cready verifies.
+autocmd FileType c nnoremap <F5> :w<CR>:!gcc -std=gnu89 -Wall -Wextra % -o %:r && ./%:r<CR>
+VIMRC
+    ok "$(msg vimrc_ok)"
+}
+
+install_editor() {
+    case "$1" in
+        vscode) install_vscode ;;
+        kate)   install_kate ;;
+        vim)    install_vim ;;
+    esac
 }
 
 # --------------------------------------------------------------------------
-# Starter project
+# Starter project (C only -- the course this was written for)
 # --------------------------------------------------------------------------
 
 create_scaffold() {
@@ -901,7 +1159,7 @@ create_scaffold() {
     }
 
     if [ ! -f "$dir/main.c" ]; then
-        cat > "$dir/main.c" <<'CSRC'
+        cat > "$dir/main.c" <<'EOF'
 #include <stdio.h>
 
 /* ANSI C with // comments enabled via -std=gnu89 */
@@ -910,7 +1168,7 @@ int main(void)
     printf("Hello, C!\n");   // press F5 to build and debug
     return 0;
 }
-CSRC
+EOF
     fi
 
     write_if_absent "$dir/Makefile" <<MAKEFILE
@@ -999,6 +1257,9 @@ PROPS
 # Main
 # --------------------------------------------------------------------------
 
+SELECTED_TOOLCHAINS=''
+SELECTED_EDITORS=''
+
 main() {
     # Before the banner, because the banner itself is localized.
     if [ "$CBOOT_LANG_EXPLICIT" = "0" ]; then
@@ -1011,103 +1272,63 @@ main() {
     local where="$DISTRO_NAME"
     [ "$IS_WSL" = "1" ] && where="$(msg wsl_suffix "$DISTRO_NAME")"
     printf '   %s\n' "$(msg detected "$where")"
-    printf '   %s\n\n' "$(msg packages "$PKG")"
+    printf '   %s\n' "$(msg packages "$PKG")"
 
-    # --- What is this for? ---
-    local profile="$CBOOT_PROFILE"
-    if [ -z "$profile" ]; then
-        printf '   %s\n\n' "$(msg q_profile)"
-        printf '   %s\n' "$(msg q_profile_1)"
-        printf '   %s\n' "$(msg q_profile_2)"
-        printf '   %s\n\n' "$(msg q_profile_3)"
-        case "$(ask "$(msg q_choose_123)" '3')" in
-            1) profile='c' ;;
-            2) profile='cpp' ;;
-            *) profile='full' ;;
-        esac
-    fi
+    SELECTED_TOOLCHAINS="$(choose_toolchains)"
+    SELECTED_EDITORS="$(choose_editors)"
 
-    local want_cpp=0 want_editor=0
-    case "$profile" in
-        c)    want_cpp=0; want_editor=0 ;;
-        cpp)  want_cpp=1; want_editor=0 ;;
-        full) want_cpp=1; want_editor=1 ;;
-        *)    die "$(msg e_profile "$profile")" ;;
-    esac
+    # Validate ids that came from the environment rather than the menu.
+    local id
+    for id in $SELECTED_TOOLCHAINS; do
+        case " $ALL_TOOLCHAINS " in *" $id "*) ;; *) die "$(msg e_badpick "$id")" ;; esac
+    done
+    for id in $SELECTED_EDITORS; do
+        case " $ALL_EDITORS " in *" $id "*) ;; *) die "$(msg e_badpick "$id")" ;; esac
+    done
+    [ -z "$SELECTED_TOOLCHAINS" ] && [ -z "$SELECTED_EDITORS" ] && die "$(msg e_nopick)"
 
-    local editor='none' want_vscode=0 want_kate=0
-    if [ "$want_editor" = "1" ]; then
-        editor="$(choose_editor)"
-        case "$editor" in
-            vscode) want_vscode=1 ;;
-            kate)   want_kate=1 ;;
-            both)   want_vscode=1; want_kate=1 ;;
-            none)   ;;
-            *)      die "$(msg e_editor "$editor")" ;;
-        esac
-    fi
-
-    local total=3
-    [ "$want_vscode" = "1" ] && total=$((total + 1))
-    [ "$want_kate" = "1" ]   && total=$((total + 1))
+    local total=0
+    for id in $SELECTED_TOOLCHAINS; do total=$((total + 1)); done
+    [ -n "$SELECTED_EDITORS" ] && total=$((total + 1))
     [ -n "$CBOOT_SCAFFOLD_DIR" ] && total=$((total + 1))
+    total=$((total + 1))   # verification step
+    local n=1
 
-    step 1 "$total" "$(msg s_check)"
-    if command -v gcc >/dev/null 2>&1; then
-        ok "$(msg found "$(command -v gcc)")"
-        ok "$(gcc --version | head -1)"
-        if ! confirm "$(msg q_reinstall)"; then
-            note "$(msg keeping)"
-            step 2 "$total" "$(msg s_skip)"
-        else
-            step 2 "$total" "$(msg s_install)"
-            install_toolchain "$want_cpp"
-        fi
-    else
-        note "$(msg no_gcc)"
-        step 2 "$total" "$(msg s_install)"
-        install_toolchain "$want_cpp"
-    fi
+    for id in $SELECTED_TOOLCHAINS; do
+        step "$n" "$total" "$(msg s_install_tc "$(tc_label "$id")")"
+        install_toolchain "$id"
+        n=$((n + 1))
+    done
 
-    local next=3
-    if [ "$want_vscode" = "1" ]; then
-        step "$next" "$total" "$(msg s_vscode)"
-        install_vscode
-        next=$((next + 1))
-    fi
-
-    if [ "$want_kate" = "1" ]; then
-        step "$next" "$total" "$(msg s_kate)"
-        install_kate
-        next=$((next + 1))
+    if [ -n "$SELECTED_EDITORS" ]; then
+        step "$n" "$total" "$(msg s_editors)"
+        for id in $SELECTED_EDITORS; do install_editor "$id"; done
+        n=$((n + 1))
     fi
 
     if [ -n "$CBOOT_SCAFFOLD_DIR" ]; then
-        step "$next" "$total" "$(msg s_scaffold)"
+        step "$n" "$total" "$(msg s_scaffold)"
         create_scaffold "$CBOOT_SCAFFOLD_DIR"
-        next=$((next + 1))
+        n=$((n + 1))
     fi
 
-    step "$next" "$total" "$(msg s_verify)"
-    verify_toolchain "$want_cpp"
+    step "$n" "$total" "$(msg s_verify)"
+    for id in $SELECTED_TOOLCHAINS; do verify_toolchain "$id"; done
 
     # --- Report ---
     printf '\n'
-    printf '%s  ===========================================%s\n' "$C_GREEN" "$C_RESET"
+    printf '%s  =============================================%s\n' "$C_GREEN" "$C_RESET"
     printf '%s   %s%s\n' "$C_GREEN" "$(msg done_title)" "$C_RESET"
-    printf '%s  ===========================================%s\n' "$C_GREEN" "$C_RESET"
+    printf '%s  =============================================%s\n' "$C_GREEN" "$C_RESET"
     printf '\n'
-    for tool in gcc g++ gdb make valgrind clangd code kate; do
+    printf '   %s\n\n' "$(msg summary)"
+    for tool in gcc g++ gdb make valgrind clangd dotnet rustc cargo go python3 pip3 javac java code kate vim; do
         if command -v "$tool" >/dev/null 2>&1; then
             printf '   %-10s %s\n' "$tool" "$(command -v "$tool")"
-        else
-            printf '   %-10s %s-%s\n' "$tool" "$C_DIM" "$C_RESET"
         fi
     done
     printf '\n'
-    printf '%s   %s%s\n' "$C_CYAN" "$(msg compile_run)" "$C_RESET"
-    printf '     gcc -std=%s -Wall hello.c -o hello\n' "$CBOOT_STD"
-    printf '     ./hello\n'
+    printf '%s   %s%s\n' "$C_YELLOW" "$(msg reopen)" "$C_RESET"
     printf '\n'
 }
 

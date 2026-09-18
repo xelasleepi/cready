@@ -1,22 +1,26 @@
 ﻿#Requires -Version 5.1
 <#
-    C/C++ Development Environment Bootstrapper for Windows
-    ------------------------------------------------------
+    cready -- universal development environment bootstrapper for Windows
+    --------------------------------------------------------------------
     Written for students of Universite Sorbonne Paris Nord (Paris 13) who need
     an ANSI C toolchain for their coursework, but nothing here is specific to
-    that university - any student on any machine can run it.
+    that university, and it is no longer limited to C.
 
-    Installs, verifies, and wires up a complete C / C++ toolchain:
+    Installs, on request:
+      C / C++   MSYS2 + MinGW-w64 UCRT64 (gcc, g++, gdb, mingw32-make)
+      C#        .NET SDK
+      Rust      rustup, cargo, rustc
+      Go        go
+      Python    python3, pip
+      Java      Microsoft OpenJDK (javac, java)
 
-      * MSYS2 + MinGW-w64 UCRT64 GCC toolchain (gcc, g++, gdb, make)
-      * GCC on the user PATH
-      * Visual Studio Code and/or Kate, with cpptools and clangd
-      * A verified test compile using ANSI C semantics with // comments
+    Editors: Visual Studio Code, Kate, Vim.
+
+    Every selected toolchain is verified by compiling and running a real
+    program before the script reports success.
 
     Speaks French (default) and English. It asks which one you want before
     anything else; CBOOT_LANG=fr|en skips the question.
-
-    Every step is skip-if-present, so re-running is safe and cheap.
 
     This file is deliberately self-contained and exceeds the usual size limit
     for a source file. It has to be: it is fetched and executed in one piece by
@@ -32,14 +36,13 @@
     Configuration is read from environment variables because a piped
     `irm | iex` script cannot accept param() arguments:
 
-        $env:CBOOT_LANG         = 'en'      # fr | en (default fr; skips the question)
-        $env:CBOOT_PROFILE      = 'c'       # c | cpp | full  (skips the question)
-        $env:CBOOT_EDITOR       = 'kate'    # vscode | kate | both | none
-        $env:CBOOT_ASSUME_YES   = '1'       # accept every default, never prompt
-        $env:CBOOT_STD          = 'gnu89'   # compiler standard for the verify step
+        $env:CBOOT_LANG         = 'en'          # fr | en (default fr)
+        $env:CBOOT_TOOLCHAINS   = 'cpp,rust'    # cpp dotnet rust go python java
+        $env:CBOOT_EDITOR       = 'vscode,vim'  # vscode kate vim, or none
+        $env:CBOOT_ASSUME_YES   = '1'           # accept every default
+        $env:CBOOT_STD          = 'gnu89'       # standard for the C verify step
         $env:CBOOT_MSYS2_ROOT   = 'C:\msys64'
-        $env:CBOOT_SKIP_VSCODE  = '1'       # skip the VS Code step
-        $env:CBOOT_SCAFFOLD_DIR = 'C:\dev\hello'  # also create a starter project
+        $env:CBOOT_SCAFFOLD_DIR = 'C:\dev\hello'
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -68,14 +71,30 @@ $LanguageWasPinned = -not [string]::IsNullOrWhiteSpace(
 $Config = @{
     Msys2Root   = Get-EnvOrDefault 'CBOOT_MSYS2_ROOT' 'C:\msys64'
     Standard    = Get-EnvOrDefault 'CBOOT_STD'        'gnu89'
-    SkipVSCode  = (Get-EnvOrDefault 'CBOOT_SKIP_VSCODE' '0') -eq '1'
     ScaffoldDir = Get-EnvOrDefault 'CBOOT_SCAFFOLD_DIR' ''
-    Profile     = Get-EnvOrDefault 'CBOOT_PROFILE' ''
+    Toolchains  = Get-EnvOrDefault 'CBOOT_TOOLCHAINS' ''
     Editor      = Get-EnvOrDefault 'CBOOT_EDITOR' ''
     Language    = (Get-EnvOrDefault 'CBOOT_LANG' 'fr').ToLower()
     AssumeYes   = (Get-EnvOrDefault 'CBOOT_ASSUME_YES' '0') -eq '1'
     MaxRetries  = 5
 }
+
+# CBOOT_PROFILE predates multi-toolchain support. Keep it working rather than
+# breaking anyone who copied an older command line.
+$legacyProfile = Get-EnvOrDefault 'CBOOT_PROFILE' ''
+if ($legacyProfile -and -not $Config.Toolchains) {
+    switch ($legacyProfile.ToLower()) {
+        'c'    { $Config.Toolchains = 'cpp'; if (-not $Config.Editor) { $Config.Editor = 'none' } }
+        'cpp'  { $Config.Toolchains = 'cpp'; if (-not $Config.Editor) { $Config.Editor = 'none' } }
+        'full' { $Config.Toolchains = 'cpp' }
+    }
+}
+if ((Get-EnvOrDefault 'CBOOT_SKIP_VSCODE' '0') -eq '1' -and -not $Config.Editor) {
+    $Config.Editor = 'none'
+}
+
+$AllToolchains = @('cpp', 'dotnet', 'rust', 'go', 'python', 'java')
+$AllEditors    = @('vscode', 'kate', 'vim')
 
 # --------------------------------------------------------------------------
 # Input validation
@@ -97,14 +116,6 @@ if ($Config.Standard -notin $AllowedStandards) {
     throw "Refusing to use CBOOT_STD='$($Config.Standard)'. Allowed: $($AllowedStandards -join ', ')"
 }
 
-if ($Config.Profile -and ($Config.Profile.ToLower() -notin @('c', 'cpp', 'full'))) {
-    throw "Unknown CBOOT_PROFILE='$($Config.Profile)' (expected c, cpp or full)"
-}
-
-if ($Config.Editor -and ($Config.Editor.ToLower() -notin @('vscode', 'kate', 'both', 'none'))) {
-    throw "Unknown CBOOT_EDITOR='$($Config.Editor)' (expected vscode, kate, both or none)"
-}
-
 # A semicolon here would not extend the path, it would append a second PATH
 # entry when this is written to the registry - an easy way to smuggle an
 # attacker-controlled directory ahead of the real tools.
@@ -123,129 +134,105 @@ if ($Config.Msys2Root -match '^\\\\') {
 $SubsystemDir   = 'ucrt64'
 $PackageGroup   = 'mingw-w64-ucrt-x86_64-toolchain'
 $Msys2Installer = 'https://repo.msys2.org/distrib/msys2-x86_64-latest.exe'
-
-$BinDir = Join-Path $Config.Msys2Root "$SubsystemDir\bin"
+$BinDir         = Join-Path $Config.Msys2Root "$SubsystemDir\bin"
 
 # --------------------------------------------------------------------------
 # Messages
-#
-# One entry per key, English and French side by side so they cannot drift
-# apart. Values are format strings for the -f operator.
 # --------------------------------------------------------------------------
 
 $Messages = @{
-    # -- banner / framing ---------------------------------------------------
-    'title'          = @{ en = 'C / C++ Development Environment Installer';           fr = "Installateur d'environnement de développement C / C++" }
+    'title'          = @{ en = 'Universal Development Environment Installer';         fr = "Installateur universel d'environnement de développement" }
     'built_for'      = @{ en = 'Built for Universite Sorbonne Paris Nord (Paris 13)'; fr = "Conçu pour les étudiants de l'Université Sorbonne" }
-    'built_for2'     = @{ en = 'students starting their ANSI C coursework.';          fr = 'Paris Nord (Paris 13) qui débutent en C ANSI.' }
+    'built_for2'     = @{ en = 'students, and for anyone else who needs a toolchain.'; fr = 'Paris Nord (Paris 13), et pour tous les autres.' }
     'not_affiliated' = @{ en = 'Not affiliated with the university -- usable by anyone.'; fr = "Sans lien avec l'université -- utilisable par tous." }
     'detected'       = @{ en = 'Detected: Windows {0}';                               fr = 'Détecté : Windows {0}' }
 
-    # -- questions ----------------------------------------------------------
-    'q_profile'      = @{ en = 'What do you need this machine set up for?';           fr = 'Pour quel usage voulez-vous configurer cette machine ?' }
-    'q_profile_1'    = @{ en = '  1) C only        - ANSI C coursework (gcc, gdb, make)'; fr = '  1) C uniquement  - TP de C ANSI (gcc, gdb, make)' }
-    'q_profile_2'    = @{ en = '  2) C and C++     - adds the g++ compiler';          fr = '  2) C et C++      - ajoute le compilateur g++' }
-    'q_profile_3'    = @{ en = '  3) Full setup    - C, C++, and an editor';          fr = '  3) Complet       - C, C++ et un éditeur' }
-    'q_choose_123'   = @{ en = 'Choose 1, 2 or 3';                                    fr = 'Choisissez 1, 2 ou 3' }
-    'q_editor'       = @{ en = 'Which editor do you want?';                           fr = 'Quel éditeur voulez-vous ?' }
-    'q_editor_1'     = @{ en = '  1) Visual Studio Code  - full IDE features, debugger, IntelliSense'; fr = '  1) Visual Studio Code  - IDE complet, débogueur, IntelliSense' }
-    'q_editor_2'     = @{ en = '  2) Kate                - lightweight KDE editor, fast, simple';      fr = '  2) Kate                - éditeur KDE léger, rapide, simple' }
-    'q_editor_3'     = @{ en = '  3) Both';                                           fr = '  3) Les deux' }
-    'q_editor_4'     = @{ en = '  4) Neither             - I already have one';       fr = "  4) Aucun               - j'en ai déjà un" }
-    'q_choose_1234'  = @{ en = 'Choose 1, 2, 3 or 4';                                 fr = 'Choisissez 1, 2, 3 ou 4' }
+    'tc_cpp'         = @{ en = 'C / C++       - gcc, g++, gdb, make';                 fr = 'C / C++       - gcc, g++, gdb, make' }
+    'tc_dotnet'      = @{ en = 'C#            - .NET SDK';                            fr = 'C#            - SDK .NET' }
+    'tc_rust'        = @{ en = 'Rust          - rustup, cargo, rustc';                fr = 'Rust          - rustup, cargo, rustc' }
+    'tc_go'          = @{ en = 'Go            - go compiler and tools';               fr = 'Go            - compilateur et outils Go' }
+    'tc_python'      = @{ en = 'Python        - python3 and pip';                     fr = 'Python        - python3 et pip' }
+    'tc_java'        = @{ en = 'Java          - JDK (javac, java)';                   fr = 'Java          - JDK (javac, java)' }
+
+    'q_tc'           = @{ en = 'Which languages do you want?';                        fr = 'Quels langages voulez-vous ?' }
+    'q_multi'        = @{ en = 'Pick one or several, separated by commas (e.g. 1,3)'; fr = 'Choisissez-en un ou plusieurs, séparés par des virgules (ex. 1,3)' }
+    'q_tc_ask'       = @{ en = 'Languages';                                           fr = 'Langages' }
+    'q_editor'       = @{ en = 'Which editors do you want?';                          fr = 'Quels éditeurs voulez-vous ?' }
+    'ed_vscode'      = @{ en = 'Visual Studio Code  - full IDE, debugger, IntelliSense'; fr = 'Visual Studio Code  - IDE complet, débogueur, IntelliSense' }
+    'ed_kate'        = @{ en = 'Kate                - lightweight KDE editor';        fr = 'Kate                - éditeur KDE léger' }
+    'ed_vim'         = @{ en = 'Vim                 - terminal editor, always available'; fr = 'Vim                 - éditeur en terminal, toujours disponible' }
+    'ed_none'        = @{ en = '0) None - I already have an editor';                  fr = "0) Aucun - j'ai déjà un éditeur" }
+    'q_editor_ask'   = @{ en = 'Editors';                                             fr = 'Éditeurs' }
     'q_yn'           = @{ en = '{0} (y/n)';                                           fr = '{0} (o/n)' }
+    'q_reinstall'    = @{ en = '{0} is already installed. Reinstall/repair anyway?';  fr = '{0} est déjà installé. Réinstaller/réparer quand même ?' }
     'q_continue'     = @{ en = 'Continue anyway?';                                    fr = 'Continuer quand même ?' }
+    'e_badpick'      = @{ en = 'Unknown choice: {0}';                                 fr = 'Choix inconnu : {0}' }
+    'e_nopick'       = @{ en = 'Nothing selected - nothing to do.';                   fr = 'Aucune sélection - rien à faire.' }
 
-    # -- steps --------------------------------------------------------------
-    's_check'        = @{ en = 'Checking for an existing GCC toolchain';              fr = "Recherche d'une chaîne d'outils GCC existante" }
-    's_msys2'        = @{ en = 'Installing MSYS2';                                    fr = 'Installation de MSYS2' }
-    's_toolchain'    = @{ en = 'Installing the MinGW-w64 GCC toolchain';              fr = "Installation de la chaîne d'outils MinGW-w64" }
-    's_path'         = @{ en = 'Configuring PATH';                                    fr = 'Configuration du PATH' }
-    's_vscode'       = @{ en = 'Installing Visual Studio Code';                       fr = 'Installation de Visual Studio Code' }
-    's_kate'         = @{ en = 'Installing Kate';                                     fr = 'Installation de Kate' }
+    's_install_tc'   = @{ en = 'Installing {0}';                                      fr = 'Installation de {0}' }
+    's_editors'      = @{ en = 'Installing editors';                                  fr = 'Installation des éditeurs' }
     's_scaffold'     = @{ en = 'Creating the starter project';                        fr = 'Création du projet de départ' }
-    's_verifying'    = @{ en = '--- Verifying ---';                                   fr = '--- Vérification ---' }
+    's_verify'       = @{ en = 'Verifying';                                           fr = 'Vérification' }
 
-    # -- environment --------------------------------------------------------
-    'not_admin'      = @{ en = 'Not running as Administrator - installers may raise a UAC prompt.'; fr = "Pas de droits administrateur - une invite UAC peut apparaître." }
-    'found'          = @{ en = 'Found: {0}';                                          fr = 'Trouvé : {0}' }
-    'no_gcc'         = @{ en = 'No gcc on PATH - will install';                       fr = 'gcc absent du PATH - installation prévue' }
+    'not_admin'      = @{ en = 'Not running as Administrator - installers may raise a UAC prompt.'; fr = 'Pas de droits administrateur - une invite UAC peut apparaître.' }
+    'already'        = @{ en = '{0} already installed ({1})';                         fr = '{0} est déjà installé ({1})' }
+    'keeping'        = @{ en = 'Keeping the existing installation';                   fr = 'Installation existante conservée' }
+    'tc_ok'          = @{ en = '{0} installed';                                       fr = '{0} installé' }
+    'tc_failed'      = @{ en = '{0} installation failed - continuing with the rest';   fr = "Échec de l'installation de {0} - on continue" }
+    'nowinget'       = @{ en = 'winget is unavailable - cannot install {0} automatically'; fr = "winget indisponible - impossible d'installer {0} automatiquement" }
+    'winget_inst'    = @{ en = 'Installing {0} via winget';                           fr = 'Installation de {0} via winget' }
+
     'path_have'      = @{ en = 'Already on PATH: {0}';                                fr = 'Déjà dans le PATH : {0}' }
     'path_added'     = @{ en = 'Added to user PATH: {0}';                             fr = 'Ajouté au PATH utilisateur : {0}' }
-    'path_long'      = @{ en = "User PATH is {0} chars; adding '{1}' risks truncation. Remove stale entries first."; fr = "Le PATH utilisateur fait {0} caracteres ; ajouter '{1}' risque de le tronquer. Supprimez d'abord les entrées obsoletes." }
+    'path_long'      = @{ en = "User PATH is {0} chars; adding '{1}' risks truncation. Remove stale entries first."; fr = "Le PATH utilisateur fait {0} caractères ; ajouter '{1}' risque de le tronquer." }
 
-    # -- MSYS2 / toolchain --------------------------------------------------
     'msys2_have'     = @{ en = 'MSYS2 already present at {0}';                        fr = 'MSYS2 est déjà présent dans {0}' }
     'msys2_ok'       = @{ en = 'MSYS2 installed at {0}';                              fr = 'MSYS2 installé dans {0}' }
     'msys2_none'     = @{ en = 'MSYS2 not found - installing';                        fr = 'MSYS2 introuvable - installation en cours' }
-    'msys2_winget'   = @{ en = 'Installing via winget';                               fr = 'Installation via winget' }
     'msys2_fallback' = @{ en = 'Falling back to the official MSYS2 installer';        fr = "Bascule vers l'installateur officiel MSYS2" }
     'msys2_fail'     = @{ en = 'MSYS2 installation failed. Install it manually from https://www.msys2.org and re-run.'; fr = "Échec de l'installation de MSYS2. Installez-le depuis https://www.msys2.org puis relancez." }
     'sig_ok'         = @{ en = 'Installer signature valid';                           fr = "Signature de l'installateur valide" }
     'sig_by'         = @{ en = 'Signed by: {0}';                                      fr = 'Signé par : {0}' }
-    'sig_bad'        = @{ en = "Refusing to run the MSYS2 installer: signature status is '{0}'. Download it yourself from https://www.msys2.org instead."; fr = "Refus d'executer l'installateur MSYS2 : statut de signature '{0}'. Téléchargez-le vous-même depuis https://www.msys2.org." }
+    'sig_bad'        = @{ en = "Refusing to run the MSYS2 installer: signature status is '{0}'."; fr = "Refus d'exécuter l'installateur MSYS2 : statut de signature '{0}'." }
     'sig_unexpected' = @{ en = 'That is not the signer this script expects for MSYS2.'; fr = "Ce n'est pas le signataire attendu pour MSYS2." }
     'sig_aborted'    = @{ en = 'Aborted at the signature check.';                     fr = 'Interrompu lors de la vérification de signature.' }
-    'tc_have'        = @{ en = 'GCC toolchain already installed';                     fr = "Chaîne d'outils GCC déjà installée" }
-    'tc_ok'          = @{ en = 'GCC toolchain installed';                             fr = "Chaîne d'outils GCC installée" }
     'tc_refresh'     = @{ en = 'Refreshing and upgrading packages';                   fr = 'Actualisation et mise à jour des paquets' }
     'tc_attempt'     = @{ en = 'Installing {0} (attempt {1}/{2})';                    fr = 'Installation de {0} (tentative {1}/{2})' }
-    'tc_retry'       = @{ en = 'Attempt failed (usually a mirror timeout) - retrying'; fr = "Tentative échouée (souvent un miroir trop lent) - nouvelle tentative" }
-    'tc_giveup'      = @{ en = 'Toolchain install failed after {0} attempts. Check your network and re-run.'; fr = "Échec de l'installation après {0} tentatives. Vérifiez votre réseau et relancez." }
+    'tc_retry'       = @{ en = 'Attempt failed (usually a mirror timeout) - retrying'; fr = 'Tentative échouée (souvent un miroir trop lent) - nouvelle tentative' }
+    'tc_giveup'      = @{ en = 'Toolchain install failed after {0} attempts.';        fr = "Échec de l'installation après {0} tentatives." }
 
-    # -- editors ------------------------------------------------------------
-    'vscode_have'    = @{ en = 'VS Code already installed';                           fr = 'VS Code est déjà installé' }
-    'vscode_ok'      = @{ en = 'VS Code installed';                                   fr = 'VS Code installé' }
-    'vscode_winget'  = @{ en = 'Installing VS Code via winget';                       fr = 'Installation de VS Code via winget' }
-    'vscode_nowinget'= @{ en = 'winget unavailable - install VS Code manually from https://code.visualstudio.com'; fr = 'winget indisponible - installez VS Code depuis https://code.visualstudio.com' }
-    'vscode_fail'    = @{ en = 'VS Code install did not complete - continuing without it'; fr = "L'installation de VS Code a échoué - on continue sans lui" }
-    'ext_check'      = @{ en = 'Ensuring the C/C++ extension is present';             fr = "Vérification de l'extension C/C++" }
-    'ext_have'       = @{ en = 'Extension ms-vscode.cpptools already installed';      fr = 'Extension ms-vscode.cpptools déjà installée' }
-    'ext_ok'         = @{ en = 'Extension ms-vscode.cpptools installed';              fr = 'Extension ms-vscode.cpptools installée' }
-    'kate_have'      = @{ en = 'Kate already installed ({0})';                        fr = 'Kate est déjà installé ({0})' }
-    'kate_ok'        = @{ en = 'Kate installed';                                      fr = 'Kate installé' }
-    'kate_winget'    = @{ en = 'Installing Kate via winget';                          fr = 'Installation de Kate via winget' }
-    'kate_nowinget'  = @{ en = 'winget unavailable - install Kate manually from https://kate-editor.org'; fr = 'winget indisponible - installez Kate depuis https://kate-editor.org' }
-    'kate_fail'      = @{ en = 'Kate install did not complete - continuing without it'; fr = "L'installation de Kate a échoué - on continue sans lui" }
-    'clangd_have'    = @{ en = 'clangd already installed';                            fr = 'clangd est déjà installé' }
-    'clangd_inst'    = @{ en = 'Installing clangd for Kate code completion';          fr = 'Installation de clangd pour la complétion dans Kate' }
+    'ext_check'      = @{ en = 'Ensuring the language extensions are present';        fr = 'Vérification des extensions de langage' }
+    'ext_have'       = @{ en = 'Extension {0} already installed';                     fr = 'Extension {0} déjà installée' }
+    'ext_ok'         = @{ en = 'Extension {0} installed';                             fr = 'Extension {0} installée' }
+    'ext_fail'       = @{ en = 'Could not install extension {0}';                     fr = "Impossible d'installer l'extension {0}" }
     'clangd_ok'      = @{ en = 'clangd installed - enable the LSP Client plugin in Kate'; fr = 'clangd installé - activez le plugin LSP Client dans Kate' }
-    'clangd_fail'    = @{ en = 'clangd install failed - Kate still works, just without completion'; fr = 'Échec de clangd - Kate fonctionne, mais sans complétion' }
-    'skipped_env'    = @{ en = 'Skipped (CBOOT_SKIP_VSCODE=1)';                       fr = 'Ignoré (CBOOT_SKIP_VSCODE=1)' }
+    'clangd_no'      = @{ en = 'clangd unavailable - Kate still works, just without completion'; fr = 'clangd indisponible - Kate fonctionne, mais sans complétion' }
+    'vimrc_ok'       = @{ en = 'Wrote a starter _vimrc (syntax, indentation, line numbers)'; fr = 'Fichier _vimrc de départ créé (syntaxe, indentation, numéros)' }
+    'vimrc_kept'     = @{ en = 'You already have a vim config - left untouched';      fr = 'Vous avez déjà une configuration vim - laissée intacte' }
 
-    # -- verification -------------------------------------------------------
-    'v_nogcc'        = @{ en = 'gcc is still not resolvable from PATH.';              fr = "gcc reste introuvable dans le PATH." }
-    'v_cfail'        = @{ en = 'Verification compile failed under -std={0}.';         fr = 'Échec de la compilation de vérification avec -std={0}.' }
-    'v_badout'       = @{ en = 'Verification binary produced unexpected output: {0}'; fr = 'Le programme de vérification a produit une sortie inattendue : {0}' }
-    'v_cok'          = @{ en = 'Compiled and ran a C program using -std={0}';         fr = 'Programme C compilé et exécuté avec -std={0}' }
-    'v_comments'     = @{ en = 'Both /* */ and // comment styles accepted';           fr = 'Les commentaires /* */ et // sont tous deux acceptés' }
-    'v_nogpp'        = @{ en = 'g++ not found - skipping the C++ check';              fr = 'g++ introuvable - vérification C++ ignorée' }
-    'v_cppok'        = @{ en = 'C++ toolchain verified (-std=c++17)';                 fr = "Chaîne d'outils C++ vérifiée (-std=c++17)" }
-    'v_cppfail'      = @{ en = 'C++ verification failed';                             fr = 'Échec de la vérification C++' }
+    'v_missing'      = @{ en = '{0} is not on PATH after installation';               fr = "{0} n'est pas dans le PATH après l'installation" }
+    'v_ok'           = @{ en = '{0} works';                                           fr = '{0} fonctionne' }
+    'v_fail'         = @{ en = '{0} failed its check';                                fr = '{0} a échoué à sa vérification' }
+    'v_comments'     = @{ en = 'Both /* */ and // comment styles accepted (-std={0})'; fr = 'Les commentaires /* */ et // sont acceptés (-std={0})' }
+    'v_newshell'     = @{ en = '{0} needs a new terminal before it is on PATH';       fr = '{0} nécessite un nouveau terminal pour être dans le PATH' }
 
-    # -- scaffold -----------------------------------------------------------
     'sc_kept'        = @{ en = 'Kept existing {0}';                                   fr = 'Fichier {0} conservé' }
     'sc_ok'          = @{ en = 'Starter project created at {0}';                      fr = 'Projet de départ créé dans {0}' }
 
-    # -- summary ------------------------------------------------------------
     'done_title'     = @{ en = 'Installation complete';                               fr = 'Installation terminée' }
-    'reopen'         = @{ en = 'IMPORTANT: open a NEW terminal before using gcc.';    fr = "IMPORTANT : ouvrez un NOUVEAU terminal avant d'utiliser gcc." }
-    'reopen2'        = @{ en = 'Existing windows still hold the old PATH.';           fr = "Les fenêtres déjà ouvertes gardent l'ancien PATH." }
-    'compile_run'    = @{ en = 'Compile and run:';                                    fr = 'Compiler et exécuter :' }
+    'summary'        = @{ en = 'What you have now:';                                  fr = 'Ce dont vous disposez :' }
+    'reopen'         = @{ en = 'Open a NEW terminal before using the new tools.';     fr = 'Ouvrez un NOUVEAU terminal avant d''utiliser les nouveaux outils.' }
     'resume1'        = @{ en = 'Re-run the installer to resume - completed steps are skipped'; fr = "Relancez l'installateur pour reprendre - les étapes terminées" }
-    'resume2'        = @{ en = 'and partial downloads are reused from the pacman cache.'; fr = 'sont ignorées et les téléchargements partiels sont réutilisés.' }
+    'resume2'        = @{ en = 'and partial downloads are reused from the package cache.'; fr = 'sont ignorées et les téléchargements partiels sont réutilisés.' }
     'cannot_prompt'  = @{ en = "Cannot prompt here - using default '{0}'";            fr = "Impossible de poser la question ici - valeur par défaut '{0}'" }
 }
 
-# Looks up a message in the active language and applies -f formatting.
 function T {
     param([string]$Key)
     $rest = @($args)
-
     if (-not $Messages.ContainsKey($Key)) { return $Key }
     $text = $Messages[$Key][$Config.Language]
     if ([string]::IsNullOrEmpty($text)) { $text = $Messages[$Key]['en'] }
-
     if ($rest.Count -gt 0) { return ($text -f $rest) }
     return $text
 }
@@ -253,41 +240,6 @@ function T {
 # --------------------------------------------------------------------------
 # Output helpers
 # --------------------------------------------------------------------------
-
-function Write-Banner {
-    Write-Host ''
-    Write-Host '  ===========================================' -ForegroundColor Cyan
-    Write-Host ("   " + (T 'title')) -ForegroundColor Cyan
-    Write-Host '  ===========================================' -ForegroundColor Cyan
-    Write-Host ''
-    Write-Host ("   " + (T 'built_for'))
-    Write-Host ("   " + (T 'built_for2'))
-    Write-Host ("   " + (T 'not_affiliated')) -ForegroundColor DarkGray
-    Write-Host ''
-    # Always shown, in both languages, whichever one is active.
-    Write-Host '   Francais / English  --  $env:CBOOT_LANG=''fr'' | ''en''' -ForegroundColor Cyan
-    Write-Host ''
-}
-
-# Asked before anything else, and printed in both languages, so an English
-# speaker never has to guess. Skipped entirely when CBOOT_LANG was set.
-function Get-Language {
-    if (-not (Test-CanPrompt)) { return 'fr' }
-
-    Write-Host ''
-    Write-Host '   +---------------------------------------+'
-    Write-Host '   |   Langue  /  Language                 |'
-    Write-Host '   +---------------------------------------+'
-    Write-Host ''
-    Write-Host '     1) Francais   (par defaut / default)'
-    Write-Host '     2) English'
-    Write-Host ''
-
-    switch (Read-Answer 'Choisissez / Choose' '1') {
-        '2'     { return 'en' }
-        default { return 'fr' }
-    }
-}
 
 function Write-Step {
     param([int]$Number, [int]$Total, [string]$Message)
@@ -299,6 +251,21 @@ function Write-Note { param([string]$M) Write-Host "      ..   $M" -ForegroundCo
 function Write-Warn { param([string]$M) Write-Host "      WARN $M" -ForegroundColor Yellow }
 function Write-Fail { param([string]$M) Write-Host "      FAIL $M" -ForegroundColor Red }
 
+function Write-Banner {
+    Write-Host ''
+    Write-Host '  =============================================' -ForegroundColor Cyan
+    Write-Host ("   cready -- " + (T 'title')) -ForegroundColor Cyan
+    Write-Host '  =============================================' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host ("   " + (T 'built_for'))
+    Write-Host ("   " + (T 'built_for2'))
+    Write-Host ("   " + (T 'not_affiliated')) -ForegroundColor DarkGray
+    Write-Host ''
+    # Always shown, in both languages, whichever one is active.
+    Write-Host '   Francais / English  --  $env:CBOOT_LANG=''fr'' | ''en''' -ForegroundColor Cyan
+    Write-Host ''
+}
+
 # --------------------------------------------------------------------------
 # Interaction
 # --------------------------------------------------------------------------
@@ -308,28 +275,19 @@ function Write-Fail { param([string]$M) Write-Host "      FAIL $M" -ForegroundCo
 function Test-CanPrompt {
     if ($Config.AssumeYes) { return $false }
     if (-not [Environment]::UserInteractive) { return $false }
-
-    # UserInteractive stays true under `powershell -NonInteractive` and in CI,
-    # where Read-Host either throws or reads redirected stdin. Checking for a
-    # redirected input stream is what actually distinguishes the two.
     try {
         if ([Console]::IsInputRedirected) { return $false }
     }
-    catch {
-        return $false
-    }
+    catch { return $false }
     return $true
 }
 
 function Read-Answer {
     param([string]$Question, [string]$Default)
-
     if (-not (Test-CanPrompt)) {
         Write-Host "      $Question [auto: $Default]" -ForegroundColor DarkGray
         return $Default
     }
-    # Even with the checks above, some hosts refuse to prompt. Falling back to
-    # the default beats aborting the whole install from the outer catch block.
     try {
         $reply = Read-Host "   $Question [$Default]"
     }
@@ -343,48 +301,98 @@ function Read-Answer {
 
 # Accepts o/O for "oui" as well as y/Y, so a French prompt behaves.
 function Read-Confirm {
-    param([string]$Question)
-    $default = if ($Config.Language -eq 'fr') { 'o' } else { 'y' }
+    param([string]$Question, [switch]$DefaultNo)
+    $default = if ($DefaultNo) { 'n' } elseif ($Config.Language -eq 'fr') { 'o' } else { 'y' }
     return (Read-Answer (T 'q_yn' $Question) $default) -match '^[YyOo]'
 }
 
-# Asks what the machine is being set up for and maps it onto the feature flags.
-function Get-Profile {
-    if ($Config.Profile) { return $Config.Profile.ToLower() }
-
-    Write-Host ("   " + (T 'q_profile'))
+# Asked before anything else, and printed in both languages, so an English
+# speaker never has to guess. Skipped entirely when CBOOT_LANG was set.
+function Get-Language {
+    if (-not (Test-CanPrompt)) { return 'fr' }
     Write-Host ''
-    Write-Host ("   " + (T 'q_profile_1'))
-    Write-Host ("   " + (T 'q_profile_2'))
-    Write-Host ("   " + (T 'q_profile_3'))
+    Write-Host '   +---------------------------------------+'
+    Write-Host '   |   Langue  /  Language                 |'
+    Write-Host '   +---------------------------------------+'
     Write-Host ''
-
-    switch (Read-Answer (T 'q_choose_123') '3') {
-        '1'     { return 'c' }
-        '2'     { return 'cpp' }
-        default { return 'full' }
+    Write-Host '     1) Francais   (par defaut / default)'
+    Write-Host '     2) English'
+    Write-Host ''
+    switch (Read-Answer 'Choisissez / Choose' '1') {
+        '2'     { return 'en' }
+        default { return 'fr' }
     }
 }
 
-# Which editor(s) to set up. Only asked when the chosen profile includes one.
-function Get-Editor {
-    if ($Config.Editor) { return $Config.Editor.ToLower() }
-    if ($Config.SkipVSCode) { return 'none' }
+# Turns "1,3" into ids drawn from $Ids. Throws on an out-of-range number so a
+# typo is reported rather than silently installing nothing.
+function Convert-Choice {
+    # Deliberately not named $Input: that is an automatic variable holding the
+    # pipeline enumerator, and a parameter of that name silently binds nothing.
+    param([string]$Selection, [string[]]$Ids)
+    $out = @()
+    foreach ($token in ($Selection -split '[,\s]+' | Where-Object { $_ -ne '' })) {
+        if ($token -notmatch '^\d+$') { throw (T 'e_badpick' $token) }
+        $n = [int]$token
+        if ($n -lt 1 -or $n -gt $Ids.Count) { throw (T 'e_badpick' $token) }
+        $id = $Ids[$n - 1]
+        if ($out -notcontains $id) { $out += $id }
+    }
+    return $out
+}
+
+function Get-Toolchains {
+    if ($Config.Toolchains) {
+        return @($Config.Toolchains -split '[,\s]+' | Where-Object { $_ -ne '' } | ForEach-Object { $_.ToLower() })
+    }
+    if (-not (Test-CanPrompt)) { return @('cpp') }
+
+    Write-Host ''
+    Write-Host ("   " + (T 'q_tc'))
+    Write-Host ("   " + (T 'q_multi')) -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host ("     1) " + (T 'tc_cpp'))
+    Write-Host ("     2) " + (T 'tc_dotnet'))
+    Write-Host ("     3) " + (T 'tc_rust'))
+    Write-Host ("     4) " + (T 'tc_go'))
+    Write-Host ("     5) " + (T 'tc_python'))
+    Write-Host ("     6) " + (T 'tc_java'))
+    Write-Host ''
+
+    while ($true) {
+        try { return (Convert-Choice (Read-Answer (T 'q_tc_ask') '1') $AllToolchains) }
+        catch {
+            Write-Warn $_.Exception.Message
+            if (-not (Test-CanPrompt)) { return @('cpp') }
+        }
+    }
+}
+
+function Get-Editors {
+    if ($Config.Editor) {
+        if ($Config.Editor.ToLower() -eq 'none') { return @() }
+        return @($Config.Editor -split '[,\s]+' | Where-Object { $_ -ne '' } | ForEach-Object { $_.ToLower() })
+    }
+    if (-not (Test-CanPrompt)) { return @() }
 
     Write-Host ''
     Write-Host ("   " + (T 'q_editor'))
+    Write-Host ("   " + (T 'q_multi')) -ForegroundColor DarkGray
     Write-Host ''
-    Write-Host ("   " + (T 'q_editor_1'))
-    Write-Host ("   " + (T 'q_editor_2'))
-    Write-Host ("   " + (T 'q_editor_3'))
-    Write-Host ("   " + (T 'q_editor_4'))
+    Write-Host ("     1) " + (T 'ed_vscode'))
+    Write-Host ("     2) " + (T 'ed_kate'))
+    Write-Host ("     3) " + (T 'ed_vim'))
+    Write-Host ("     " + (T 'ed_none'))
     Write-Host ''
 
-    switch (Read-Answer (T 'q_choose_1234') '1') {
-        '2'     { return 'kate' }
-        '3'     { return 'both' }
-        '4'     { return 'none' }
-        default { return 'vscode' }
+    while ($true) {
+        $answer = Read-Answer (T 'q_editor_ask') '1'
+        if ($answer -eq '0') { return @() }
+        try { return (Convert-Choice $answer $AllEditors) }
+        catch {
+            Write-Warn $_.Exception.Message
+            if (-not (Test-CanPrompt)) { return @() }
+        }
     }
 }
 
@@ -394,7 +402,6 @@ function Get-Editor {
 
 # A freshly installed program is invisible to this process until the registry
 # PATH is re-read, because the environment block was copied at process start.
-# Rebuild it after every installation step.
 function Sync-ProcessPath {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user    = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -440,8 +447,27 @@ function Add-ToUserPath {
     Write-Ok (T 'path_added' $Directory)
 }
 
+# Shared winget wrapper. Everything except the C/C++ toolchain comes from
+# winget, so the retry/reporting logic lives in one place.
+function Install-ViaWinget {
+    param([string]$Id, [string]$Label, [string[]]$ExtraArgs = @())
+
+    $winget = Resolve-Tool 'winget'
+    if (-not $winget) {
+        Write-Warn (T 'nowinget' $Label)
+        return $false
+    }
+
+    Write-Note (T 'winget_inst' $Label)
+    $argList = @('install', '--id', $Id, '-e', '--source', 'winget',
+                 '--accept-package-agreements', '--accept-source-agreements') + $ExtraArgs
+    & $winget @argList 2>&1 | ForEach-Object { Write-Note $_ }
+    Sync-ProcessPath
+    return $true
+}
+
 # --------------------------------------------------------------------------
-# MSYS2 / pacman
+# MSYS2 / pacman (C and C++ only)
 # --------------------------------------------------------------------------
 
 function Invoke-Pacman {
@@ -457,9 +483,7 @@ function Invoke-Pacman {
         & $bash -lc "pacman $Arguments" 2>&1 | ForEach-Object { Write-Note $_ }
         return $LASTEXITCODE
     }
-    finally {
-        $env:MSYSTEM = $previous
-    }
+    finally { $env:MSYSTEM = $previous }
 }
 
 # Refuses to run a downloaded binary whose Authenticode signature is missing or
@@ -470,10 +494,7 @@ function Assert-TrustedInstaller {
     param([string]$Path)
 
     $signature = Get-AuthenticodeSignature -FilePath $Path
-
-    if ($signature.Status -ne 'Valid') {
-        throw (T 'sig_bad' $signature.Status)
-    }
+    if ($signature.Status -ne 'Valid') { throw (T 'sig_bad' $signature.Status) }
 
     $signer = $signature.SignerCertificate.Subject
     Write-Ok (T 'sig_ok')
@@ -481,9 +502,7 @@ function Assert-TrustedInstaller {
 
     if ($signer -notmatch 'MSYS2|Christoph Reiter') {
         Write-Warn (T 'sig_unexpected')
-        if (-not (Read-Confirm (T 'q_continue'))) {
-            throw (T 'sig_aborted')
-        }
+        if (-not (Read-Confirm (T 'q_continue'))) { throw (T 'sig_aborted') }
     }
 }
 
@@ -494,15 +513,7 @@ function Install-Msys2 {
     }
 
     Write-Note (T 'msys2_none')
-
-    $winget = Resolve-Tool 'winget'
-    if ($winget) {
-        Write-Note (T 'msys2_winget')
-        & $winget install --id MSYS2.MSYS2 -e --source winget `
-            --accept-package-agreements --accept-source-agreements 2>&1 |
-            ForEach-Object { Write-Note $_ }
-        Sync-ProcessPath
-    }
+    Install-ViaWinget -Id 'MSYS2.MSYS2' -Label 'MSYS2' | Out-Null
 
     if (-not (Test-Path (Join-Path $Config.Msys2Root 'usr\bin\bash.exe'))) {
         Write-Note (T 'msys2_fallback')
@@ -510,7 +521,6 @@ function Install-Msys2 {
         # Random filename: a fixed name in %TEMP% is guessable and could be
         # pre-created as a junction pointing somewhere else.
         $temp = Join-Path $env:TEMP ("msys2-" + [IO.Path]::GetRandomFileName() + ".exe")
-
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $Msys2Installer -OutFile $temp -UseBasicParsing
 
@@ -519,16 +529,12 @@ function Install-Msys2 {
             # run unverified. HTTPS protects it in transit but says nothing
             # about the file itself if the origin or a cache were tampered with.
             Assert-TrustedInstaller -Path $temp
-
-            # Qt Installer Framework silent-install flags; root wants forward slashes.
             $root = $Config.Msys2Root -replace '\\', '/'
             Start-Process -FilePath $temp -Wait -ArgumentList @(
                 'in', '--confirm-command', '--accept-messages', '--root', $root
             )
         }
-        finally {
-            Remove-Item $temp -Force -ErrorAction SilentlyContinue
-        }
+        finally { Remove-Item $temp -Force -ErrorAction SilentlyContinue }
     }
 
     if (-not (Test-Path (Join-Path $Config.Msys2Root 'usr\bin\bash.exe'))) {
@@ -537,42 +543,212 @@ function Install-Msys2 {
     Write-Ok (T 'msys2_ok' $Config.Msys2Root)
 }
 
-function Install-Toolchain {
-    if (Test-Path (Join-Path $BinDir 'gcc.exe')) {
-        Write-Ok (T 'tc_have')
-        return
-    }
+function Install-CppToolchain {
+    Install-Msys2
 
-    # -Syu, not -Sy. MSYS2 documents partial upgrades as unsupported: syncing
-    # the database without upgrading can install packages built against newer
-    # libraries than the ones on disk. Matters most when pointed at an older
-    # pre-existing MSYS2 rather than a fresh one.
-    Write-Note (T 'tc_refresh')
-    Invoke-Pacman '-Syu --noconfirm' | Out-Null
+    if (-not (Test-Path (Join-Path $BinDir 'gcc.exe'))) {
+        # -Syu, not -Sy. MSYS2 documents partial upgrades as unsupported:
+        # syncing the database without upgrading can install packages built
+        # against newer libraries than the ones on disk.
+        Write-Note (T 'tc_refresh')
+        Invoke-Pacman '-Syu --noconfirm' | Out-Null
 
-    # MSYS2 mirrors time out fairly often mid-transaction. Completed package
-    # downloads stay in the pacman cache, so each retry resumes rather than
-    # restarting - a handful of attempts reliably gets there.
-    $installed = $false
-    for ($attempt = 1; $attempt -le $Config.MaxRetries; $attempt++) {
-        Write-Note (T 'tc_attempt' $PackageGroup $attempt $Config.MaxRetries)
-        $code = Invoke-Pacman "-S --needed --noconfirm $PackageGroup"
-
-        if ($code -eq 0 -and (Test-Path (Join-Path $BinDir 'gcc.exe'))) {
-            $installed = $true
-            break
+        # MSYS2 mirrors time out fairly often mid-transaction. Completed
+        # downloads stay in the pacman cache, so each retry resumes.
+        $installed = $false
+        for ($attempt = 1; $attempt -le $Config.MaxRetries; $attempt++) {
+            Write-Note (T 'tc_attempt' $PackageGroup $attempt $Config.MaxRetries)
+            $code = Invoke-Pacman "-S --needed --noconfirm $PackageGroup"
+            if ($code -eq 0 -and (Test-Path (Join-Path $BinDir 'gcc.exe'))) { $installed = $true; break }
+            Write-Warn (T 'tc_retry')
         }
-        Write-Warn (T 'tc_retry')
+        if (-not $installed) { throw (T 'tc_giveup' $Config.MaxRetries) }
     }
 
-    if (-not $installed) {
-        throw (T 'tc_giveup' $Config.MaxRetries)
-    }
-    Write-Ok (T 'tc_ok')
+    Add-ToUserPath -Directory $BinDir
+    Write-Ok (T 'tc_ok' 'C / C++')
 }
 
 # --------------------------------------------------------------------------
-# Visual Studio Code
+# Toolchain registry
+# --------------------------------------------------------------------------
+
+function Get-ToolchainLabel {
+    param([string]$Id)
+    switch ($Id) {
+        'cpp'    { return 'C / C++' }
+        'dotnet' { return 'C# (.NET)' }
+        'rust'   { return 'Rust' }
+        'go'     { return 'Go' }
+        'python' { return 'Python' }
+        'java'   { return 'Java' }
+        default  { return $Id }
+    }
+}
+
+function Get-ToolchainProbe {
+    param([string]$Id)
+    switch ($Id) {
+        'cpp'    { return 'gcc' }
+        'dotnet' { return 'dotnet' }
+        'rust'   { return 'rustc' }
+        'go'     { return 'go' }
+        'python' { return 'python' }
+        'java'   { return 'javac' }
+        default  { return $Id }
+    }
+}
+
+function Install-Toolchain {
+    param([string]$Id)
+
+    $label = Get-ToolchainLabel $Id
+    $probe = Get-ToolchainProbe $Id
+
+    Sync-ProcessPath
+    $existing = Resolve-Tool $probe
+    if ($existing) {
+        Write-Ok (T 'already' $label $existing)
+        # Re-installing something that already works is the surprising choice,
+        # so an unattended run must default to keeping it.
+        if (-not (Read-Confirm (T 'q_reinstall' $label) -DefaultNo)) {
+            Write-Note (T 'keeping')
+            return
+        }
+    }
+
+    switch ($Id) {
+        'cpp'    { Install-CppToolchain; return }
+        'dotnet' { Install-ViaWinget -Id 'Microsoft.DotNet.SDK.8'  -Label $label | Out-Null }
+        'rust'   { Install-ViaWinget -Id 'Rustlang.Rustup'         -Label $label | Out-Null }
+        'go'     { Install-ViaWinget -Id 'GoLang.Go'               -Label $label | Out-Null }
+        'python' { Install-ViaWinget -Id 'Python.Python.3.12'      -Label $label | Out-Null }
+        'java'   { Install-ViaWinget -Id 'Microsoft.OpenJDK.21'    -Label $label | Out-Null }
+    }
+
+    Sync-ProcessPath
+    if (Resolve-Tool $probe) {
+        Write-Ok (T 'tc_ok' $label)
+    }
+    else {
+        # winget frequently installs correctly but the new PATH only reaches
+        # brand-new processes, so this is a warning rather than a failure.
+        Write-Warn (T 'v_newshell' $label)
+    }
+}
+
+# --------------------------------------------------------------------------
+# Verification
+# --------------------------------------------------------------------------
+
+# Runs an external tool and returns its combined output plus exit code without
+# letting stderr become a terminating error. PowerShell 5.1 wraps a native
+# command's stderr in ErrorRecords, which $ErrorActionPreference='Stop' would
+# otherwise turn into an exception - a tool printing a warning is not a crash.
+function Invoke-Capture {
+    param([string]$Exe, [string[]]$Arguments = @())
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $text = (& $Exe @Arguments 2>&1 | Out-String)
+        return @{ Output = $text; Code = $LASTEXITCODE }
+    }
+    catch { return @{ Output = $_.Exception.Message; Code = -1 } }
+    finally { $ErrorActionPreference = $previous }
+}
+
+function Test-Toolchain {
+    param([string]$Id)
+
+    Sync-ProcessPath
+    $label = Get-ToolchainLabel $Id
+    $probe = Get-ToolchainProbe $Id
+    if (-not (Resolve-Tool $probe)) {
+        Write-Warn (T 'v_missing' $label)
+        return
+    }
+
+    $work = Join-Path $env:TEMP ('cready-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+
+    try {
+        switch ($Id) {
+            'cpp' {
+                # Mixes ANSI block comments with // line comments, so a pass
+                # proves the configured standard accepts both styles.
+                $src = Join-Path $work 'v.c'
+                @'
+#include <stdio.h>
+/* ANSI C style block comment */
+int main(void)
+{
+    int value = 42;   // line comment - rejected by strict c89
+    printf("OK %d\n", value);
+    return 0;
+}
+'@ | Set-Content -Path $src -Encoding ASCII
+                $exe = Join-Path $work 'v.exe'
+                Invoke-Capture (Resolve-Tool 'gcc') @("-std=$($Config.Standard)", '-Wall', '-Wextra', $src, '-o', $exe) | Out-Null
+                if ((Test-Path $exe) -and ((Invoke-Capture $exe).Output -match 'OK 42')) {
+                    Write-Ok (T 'v_ok' 'C')
+                    Write-Ok (T 'v_comments' $Config.Standard)
+                }
+                else { Write-Warn (T 'v_fail' 'C') }
+
+                if (Resolve-Tool 'g++') {
+                    $csrc = Join-Path $work 'v.cpp'
+                    @'
+#include <iostream>
+#include <vector>
+int main() { std::vector<int> v{1,2,3}; for (int i : v) std::cout << i; std::cout << " OK\n"; }
+'@ | Set-Content -Path $csrc -Encoding ASCII
+                    $cexe = Join-Path $work 'vpp.exe'
+                    Invoke-Capture (Resolve-Tool 'g++') @('-std=c++17', $csrc, '-o', $cexe) | Out-Null
+                    if ((Test-Path $cexe) -and ((Invoke-Capture $cexe).Output -match 'OK')) { Write-Ok (T 'v_ok' 'C++') }
+                    else { Write-Warn (T 'v_fail' 'C++') }
+                }
+            }
+            'rust' {
+                $src = Join-Path $work 'v.rs'
+                'fn main() { println!("OK"); }' | Set-Content -Path $src -Encoding ASCII
+                $exe = Join-Path $work 'v.exe'
+                Invoke-Capture (Resolve-Tool 'rustc') @($src, '-o', $exe) | Out-Null
+                if ((Test-Path $exe) -and ((Invoke-Capture $exe).Output -match 'OK')) { Write-Ok (T 'v_ok' $label) }
+                else { Write-Warn (T 'v_fail' $label) }
+            }
+            'go' {
+                $src = Join-Path $work 'v.go'
+                "package main`nimport `"fmt`"`nfunc main() { fmt.Println(`"OK`") }" |
+                    Set-Content -Path $src -Encoding ASCII
+                $out = (Invoke-Capture (Resolve-Tool 'go') @('run', $src)).Output
+                if ($out -match 'OK') { Write-Ok (T 'v_ok' $label) } else { Write-Warn (T 'v_fail' $label) }
+            }
+            'python' {
+                $out = (Invoke-Capture (Resolve-Tool 'python') @('-c', 'print("OK")')).Output
+                if ($out -match 'OK') { Write-Ok (T 'v_ok' $label) } else { Write-Warn (T 'v_fail' $label) }
+            }
+            'java' {
+                $src = Join-Path $work 'Hello.java'
+                'public class Hello { public static void main(String[] a) { System.out.println("OK"); } }' |
+                    Set-Content -Path $src -Encoding ASCII
+                Invoke-Capture (Resolve-Tool 'javac') @($src) | Out-Null
+                Push-Location $work
+                try { $out = (Invoke-Capture (Resolve-Tool 'java') @('Hello')).Output } finally { Pop-Location }
+                if ($out -match 'OK') { Write-Ok (T 'v_ok' $label) } else { Write-Warn (T 'v_fail' $label) }
+            }
+            'dotnet' {
+                # `dotnet new` + build costs tens of seconds on first run, so
+                # this checks the SDK is registered rather than building.
+                $out = (Invoke-Capture (Resolve-Tool 'dotnet') @('--list-sdks')).Output
+                if ($out -match '\d') { Write-Ok (T 'v_ok' $label) } else { Write-Warn (T 'v_fail' $label) }
+            }
+        }
+    }
+    finally { Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# --------------------------------------------------------------------------
+# Editors
 # --------------------------------------------------------------------------
 
 function Find-VSCode {
@@ -581,222 +757,130 @@ function Find-VSCode {
         (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'),
         (Join-Path $env:ProgramFiles  'Microsoft VS Code\bin\code.cmd')
     )
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path $candidate)) { return $candidate }
-    }
+    foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { return $c } }
     return $null
 }
 
 function Install-VSCode {
-    if ($Config.SkipVSCode) {
-        Write-Note (T 'skipped_env')
-        return $null
-    }
-
     $code = Find-VSCode
-    if ($code) {
-        Write-Ok (T 'vscode_have')
-    }
+    if ($code) { Write-Ok (T 'already' 'VS Code' $code) }
     else {
-        $winget = Resolve-Tool 'winget'
-        if (-not $winget) {
-            Write-Warn (T 'vscode_nowinget')
-            return $null
-        }
-
-        Write-Note (T 'vscode_winget')
-        & $winget install --id Microsoft.VisualStudioCode -e --source winget `
-            --scope user --accept-package-agreements --accept-source-agreements 2>&1 |
-            ForEach-Object { Write-Note $_ }
-
-        Sync-ProcessPath
+        Install-ViaWinget -Id 'Microsoft.VisualStudioCode' -Label 'VS Code' -ExtraArgs @('--scope', 'user') | Out-Null
         $code = Find-VSCode
-        if (-not $code) {
-            Write-Warn (T 'vscode_fail')
-            return $null
-        }
-        Write-Ok (T 'vscode_ok')
+        if (-not $code) { Write-Warn (T 'tc_failed' 'VS Code'); return }
+        Write-Ok (T 'tc_ok' 'VS Code')
     }
 
-    # The C/C++ extension supplies IntelliSense and the cppdbg debugger that
-    # the generated launch.json depends on.
+    # Extensions follow the languages that were actually installed, so a
+    # Python-only setup does not drag in the C/C++ toolset and vice versa.
     Write-Note (T 'ext_check')
-    $existing = & $code --list-extensions 2>$null
-    if ($existing -contains 'ms-vscode.cpptools') {
-        Write-Ok (T 'ext_have')
+    $installed = & $code --list-extensions 2>$null
+    foreach ($id in $Script:SelectedToolchains) {
+        $ext = switch ($id) {
+            'cpp'    { 'ms-vscode.cpptools' }
+            'dotnet' { 'ms-dotnettools.csharp' }
+            'rust'   { 'rust-lang.rust-analyzer' }
+            'go'     { 'golang.go' }
+            'python' { 'ms-python.python' }
+            'java'   { 'redhat.java' }
+            default  { $null }
+        }
+        if (-not $ext) { continue }
+        if ($installed -contains $ext) { Write-Ok (T 'ext_have' $ext); continue }
+        & $code --install-extension $ext --force 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { Write-Ok (T 'ext_ok' $ext) } else { Write-Warn (T 'ext_fail' $ext) }
     }
-    else {
-        & $code --install-extension ms-vscode.cpptools --force 2>&1 |
-            ForEach-Object { Write-Note $_ }
-        Write-Ok (T 'ext_ok')
-    }
-
-    return $code
 }
-
-# --------------------------------------------------------------------------
-# Kate
-# --------------------------------------------------------------------------
 
 function Find-Kate {
     $candidates = @(
         (Resolve-Tool 'kate'),
-        (Join-Path $env:ProgramFiles          'Kate\bin\kate.exe'),
-        (Join-Path ${env:ProgramFiles(x86)}   'Kate\bin\kate.exe'),
-        (Join-Path $env:LOCALAPPDATA          'Programs\Kate\bin\kate.exe')
+        (Join-Path $env:ProgramFiles        'Kate\bin\kate.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Kate\bin\kate.exe'),
+        (Join-Path $env:LOCALAPPDATA        'Programs\Kate\bin\kate.exe')
     )
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path $candidate)) { return $candidate }
-    }
+    foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { return $c } }
     return $null
 }
 
 function Install-Kate {
     $kate = Find-Kate
-    if ($kate) {
-        Write-Ok (T 'kate_have' $kate)
-        return $kate
+    if ($kate) { Write-Ok (T 'already' 'Kate' $kate) }
+    else {
+        Install-ViaWinget -Id 'KDE.Kate' -Label 'Kate' | Out-Null
+        $kate = Find-Kate
+        if (-not $kate) { Write-Warn (T 'tc_failed' 'Kate'); return }
+        Write-Ok (T 'tc_ok' 'Kate')
     }
 
-    $winget = Resolve-Tool 'winget'
-    if (-not $winget) {
-        Write-Warn (T 'kate_nowinget')
-        return $null
-    }
+    # Kate has no built-in C parser; its LSP plugin drives clangd. Only worth
+    # installing when a C/C++ toolchain was actually selected.
+    if ($Script:SelectedToolchains -notcontains 'cpp') { return }
+    if (Resolve-Tool 'clangd') { Write-Ok (T 'already' 'clangd' (Resolve-Tool 'clangd')); return }
 
-    Write-Note (T 'kate_winget')
-    & $winget install --id KDE.Kate -e --source winget `
-        --accept-package-agreements --accept-source-agreements 2>&1 |
-        ForEach-Object { Write-Note $_ }
-
+    $code = Invoke-Pacman '-S --needed --noconfirm mingw-w64-ucrt-x86_64-clang-tools-extra'
     Sync-ProcessPath
-    $kate = Find-Kate
-    if (-not $kate) {
-        Write-Warn (T 'kate_fail')
-        return $null
-    }
-    Write-Ok (T 'kate_ok')
-
-    # Kate has no built-in C parser. Its LSP plugin drives clangd, so install
-    # clangd too, otherwise Kate is only a syntax-highlighting text editor.
-    Install-Clangd
-    return $kate
+    if ($code -eq 0 -and (Resolve-Tool 'clangd')) { Write-Ok (T 'clangd_ok') }
+    else { Write-Warn (T 'clangd_no') }
 }
 
-# Best-effort: Kate is perfectly usable without it, so never fail the install.
-function Install-Clangd {
-    if (Resolve-Tool 'clangd') {
-        Write-Ok (T 'clangd_have')
+function Install-Vim {
+    $vim = Resolve-Tool 'vim'
+    if ($vim) { Write-Ok (T 'already' 'Vim' $vim) }
+    else {
+        Install-ViaWinget -Id 'vim.vim' -Label 'Vim' | Out-Null
+        $vim = Resolve-Tool 'vim'
+        if (-not $vim) { Write-Warn (T 'v_newshell' 'Vim') }
+        else { Write-Ok (T 'tc_ok' 'Vim') }
+    }
+    Write-VimRc
+}
+
+# A stock vim has no syntax highlighting and 8-wide tabs, which is a rough
+# first impression. Only ever written when the user has no vim config at all.
+function Write-VimRc {
+    $rc = Join-Path $env:USERPROFILE '_vimrc'
+    $alt = Join-Path $env:USERPROFILE '.vimrc'
+    if ((Test-Path $rc) -or (Test-Path $alt)) {
+        Write-Note (T 'vimrc_kept')
         return
     }
+    @'
+" Starter configuration written by cready. Edit freely.
+syntax on
+filetype plugin indent on
 
-    Write-Note (T 'clangd_inst')
-    $code = Invoke-Pacman '-S --needed --noconfirm mingw-w64-ucrt-x86_64-clang-tools-extra'
+set number
+set tabstop=4
+set shiftwidth=4
+set expandtab
+set autoindent
+set smartindent
 
-    Sync-ProcessPath
-    if ($code -eq 0 -and (Resolve-Tool 'clangd')) {
-        Write-Ok (T 'clangd_ok')
-    }
-    else {
-        Write-Warn (T 'clangd_fail')
-    }
+set incsearch
+set hlsearch
+set ignorecase
+set smartcase
+
+set ruler
+set showcmd
+set wildmenu
+set backspace=indent,eol,start
+set encoding=utf-8
+'@ | Set-Content -Path $rc -Encoding ASCII
+    Write-Ok (T 'vimrc_ok')
 }
 
 # --------------------------------------------------------------------------
-# Verification
-# --------------------------------------------------------------------------
-
-function Test-Toolchain {
-    param([bool]$IncludeCpp)
-
-    Sync-ProcessPath
-
-    $gcc = Resolve-Tool 'gcc'
-    if (-not $gcc) { throw (T 'v_nogcc') }
-
-    $work = Join-Path $env:TEMP ('cboot-verify-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-    New-Item -ItemType Directory -Path $work -Force | Out-Null
-
-    try {
-        # Deliberately mixes ANSI block comments with // line comments, so a
-        # pass proves the configured standard accepts both styles.
-        $source = Join-Path $work 'verify.c'
-        @'
-#include <stdio.h>
-
-/* ANSI C style block comment */
-int main(void)
-{
-    int value = 42;   // line comment - rejected by strict c89
-    printf("TOOLCHAIN_OK %d\n", value);
-    return 0;
-}
-'@ | Set-Content -Path $source -Encoding ASCII
-
-        $exe = Join-Path $work 'verify.exe'
-        & $gcc "-std=$($Config.Standard)" -Wall -Wextra $source -o $exe 2>&1 |
-            ForEach-Object { Write-Note $_ }
-
-        if (-not (Test-Path $exe)) {
-            throw (T 'v_cfail' $Config.Standard)
-        }
-
-        $output = & $exe
-        if ($output -notmatch 'TOOLCHAIN_OK 42') {
-            throw (T 'v_badout' $output)
-        }
-
-        Write-Ok (T 'v_cok' $Config.Standard)
-        Write-Ok (T 'v_comments')
-
-        if ($IncludeCpp) {
-            $gpp = Resolve-Tool 'g++'
-            if (-not $gpp) {
-                Write-Warn (T 'v_nogpp')
-                return
-            }
-
-            $cppSource = Join-Path $work 'verify.cpp'
-            @'
-#include <iostream>
-#include <vector>
-int main() {
-    std::vector<int> v{1, 2, 3};
-    for (int i : v) std::cout << i;
-    std::cout << " CPP_OK\n";
-}
-'@ | Set-Content -Path $cppSource -Encoding ASCII
-
-            $cppExe = Join-Path $work 'verifycpp.exe'
-            & $gpp -std=c++17 $cppSource -o $cppExe 2>&1 | ForEach-Object { Write-Note $_ }
-
-            if ((Test-Path $cppExe) -and ((& $cppExe) -match 'CPP_OK')) {
-                Write-Ok (T 'v_cppok')
-            }
-            else {
-                Write-Warn (T 'v_cppfail')
-            }
-        }
-    }
-    finally {
-        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
-    }
-}
-
-# --------------------------------------------------------------------------
-# Optional starter project
+# Starter project (C only -- the course this was written for)
 # --------------------------------------------------------------------------
 
 # Never overwrite. CBOOT_SCAFFOLD_DIR is just a path, so it is easy to aim at a
-# real project by accident; silently replacing a tuned launch.json would destroy
-# the student's work.
+# real project by accident; silently replacing a tuned launch.json would
+# destroy the student's work.
 function Write-IfAbsent {
     param([string]$Path, [string]$Content)
-
-    if (Test-Path $Path) {
-        Write-Note (T 'sc_kept' (Split-Path $Path -Leaf))
-        return
-    }
+    if (Test-Path $Path) { Write-Note (T 'sc_kept' (Split-Path $Path -Leaf)); return }
     Set-Content -Path $Path -Value $Content -Encoding ASCII
 }
 
@@ -838,13 +922,8 @@ int main(void)
       "label": "build active file",
       "command": "__GCC__",
       "args": [
-        "-std=__STD__",
-        "-Wall",
-        "-Wextra",
-        "-g",
-        "${file}",
-        "-o",
-        "${fileDirname}\\__BSNAME__.exe"
+        "-std=__STD__", "-Wall", "-Wextra", "-g",
+        "${file}", "-o", "${fileDirname}\\__BSNAME__.exe"
       ],
       "options": { "cwd": "${fileDirname}" },
       "problemMatcher": ["$gcc"],
@@ -907,103 +986,77 @@ int main(void)
 # Main
 # --------------------------------------------------------------------------
 
+$Script:SelectedToolchains = @()
+$Script:SelectedEditors    = @()
+
 function Invoke-Bootstrap {
     # Before the banner, because the banner itself is localized.
-    if (-not $LanguageWasPinned) {
-        $Config.Language = Get-Language
-    }
+    if (-not $LanguageWasPinned) { $Config.Language = Get-Language }
 
     Write-Banner
-
     Write-Host ("   " + (T 'detected' ([Environment]::OSVersion.Version)))
-    Write-Host ''
 
-    $setupProfile = Get-Profile
-    $includeCpp   = $setupProfile -in @('cpp', 'full')
+    if (-not (Test-IsAdmin)) { Write-Warn (T 'not_admin') }
 
-    $editor = 'none'
-    if ($setupProfile -eq 'full') { $editor = Get-Editor }
-    $wantVSCode = $editor -in @('vscode', 'both')
-    $wantKate   = $editor -in @('kate',   'both')
+    $Script:SelectedToolchains = Get-Toolchains
+    $Script:SelectedEditors    = Get-Editors
 
-    # The MSYS2 toolchain group ships gcc and g++ as one unit, so the profile
-    # controls what gets verified and which editors are installed, not which
-    # compilers land on disk.
-    $total = 4
-    if ($wantVSCode)          { $total++ }
-    if ($wantKate)            { $total++ }
-    if ($Config.ScaffoldDir)  { $total++ }
-    $stepNumber = 1
-
-    if (-not (Test-IsAdmin)) {
-        Write-Warn (T 'not_admin')
+    # Validate ids that came from the environment rather than the menu.
+    foreach ($id in $Script:SelectedToolchains) {
+        if ($id -notin $AllToolchains) { throw (T 'e_badpick' $id) }
+    }
+    foreach ($id in $Script:SelectedEditors) {
+        if ($id -notin $AllEditors) { throw (T 'e_badpick' $id) }
+    }
+    if ($Script:SelectedToolchains.Count -eq 0 -and $Script:SelectedEditors.Count -eq 0) {
+        throw (T 'e_nopick')
     }
 
-    Write-Step $stepNumber $total (T 's_check'); $stepNumber++
-    Sync-ProcessPath
-    $existingGcc = Resolve-Tool 'gcc'
-    if ($existingGcc) {
-        Write-Ok (T 'found' $existingGcc)
-        Write-Ok (& $existingGcc --version | Select-Object -First 1)
-    }
-    else {
-        Write-Note (T 'no_gcc')
-    }
+    $total = $Script:SelectedToolchains.Count + 1
+    if ($Script:SelectedEditors.Count -gt 0) { $total++ }
+    if ($Config.ScaffoldDir)                 { $total++ }
+    $n = 1
 
-    Write-Step $stepNumber $total (T 's_msys2'); $stepNumber++
-    Install-Msys2
-
-    Write-Step $stepNumber $total (T 's_toolchain'); $stepNumber++
-    Install-Toolchain
-
-    Write-Step $stepNumber $total (T 's_path'); $stepNumber++
-    Add-ToUserPath -Directory $BinDir
-
-    $code = $null
-    if ($wantVSCode) {
-        Write-Step $stepNumber $total (T 's_vscode'); $stepNumber++
-        $code = Install-VSCode
+    foreach ($id in $Script:SelectedToolchains) {
+        Write-Step $n $total (T 's_install_tc' (Get-ToolchainLabel $id)); $n++
+        try { Install-Toolchain $id }
+        catch { Write-Warn (T 'tc_failed' (Get-ToolchainLabel $id)); Write-Note $_.Exception.Message }
     }
 
-    $kate = $null
-    if ($wantKate) {
-        Write-Step $stepNumber $total (T 's_kate'); $stepNumber++
-        $kate = Install-Kate
+    if ($Script:SelectedEditors.Count -gt 0) {
+        Write-Step $n $total (T 's_editors'); $n++
+        foreach ($id in $Script:SelectedEditors) {
+            switch ($id) {
+                'vscode' { Install-VSCode }
+                'kate'   { Install-Kate }
+                'vim'    { Install-Vim }
+            }
+        }
     }
 
     if ($Config.ScaffoldDir) {
-        Write-Step $stepNumber $total (T 's_scaffold'); $stepNumber++
+        Write-Step $n $total (T 's_scaffold'); $n++
         New-Scaffold -Directory $Config.ScaffoldDir
     }
 
-    Write-Host ''
-    Write-Host ("  " + (T 's_verifying')) -ForegroundColor Cyan
-    Test-Toolchain -IncludeCpp $includeCpp
+    Write-Step $n $total (T 's_verify')
+    foreach ($id in $Script:SelectedToolchains) { Test-Toolchain $id }
 
     Write-Host ''
-    Write-Host '  ===========================================' -ForegroundColor Green
+    Write-Host '  =============================================' -ForegroundColor Green
     Write-Host ("   " + (T 'done_title')) -ForegroundColor Green
-    Write-Host '  ===========================================' -ForegroundColor Green
+    Write-Host '  =============================================' -ForegroundColor Green
     Write-Host ''
-
-    foreach ($tool in @('gcc', 'g++', 'gdb', 'mingw32-make')) {
+    Write-Host ("   " + (T 'summary'))
+    Write-Host ''
+    foreach ($tool in @('gcc', 'g++', 'gdb', 'mingw32-make', 'clangd',
+                        'dotnet', 'rustc', 'cargo', 'go', 'python', 'pip',
+                        'javac', 'java', 'code', 'kate', 'vim')) {
         $path = Resolve-Tool $tool
         if ($path) { Write-Host ('   {0,-14} {1}' -f $tool, $path) -ForegroundColor Gray }
-        else       { Write-Host ('   {0,-14} MISSING' -f $tool) -ForegroundColor Red }
     }
-    if (Resolve-Tool 'clangd') {
-        Write-Host ('   {0,-14} {1}' -f 'clangd', (Resolve-Tool 'clangd')) -ForegroundColor Gray
-    }
-    if ($code) { Write-Host ('   {0,-14} {1}' -f 'vs code', $code) -ForegroundColor Gray }
-    if ($kate) { Write-Host ('   {0,-14} {1}' -f 'kate',    $kate) -ForegroundColor Gray }
-
     Write-Host ''
-    Write-Host ("   " + (T 'reopen'))  -ForegroundColor Yellow
-    Write-Host ("   " + (T 'reopen2')) -ForegroundColor Yellow
-    Write-Host ''
-    Write-Host ("   " + (T 'compile_run')) -ForegroundColor Cyan
-    Write-Host ('     gcc -std={0} -Wall hello.c -o hello.exe' -f $Config.Standard) -ForegroundColor White
-    Write-Host '     hello.exe' -ForegroundColor White
+    Write-Host ("   " + (T 'reopen')) -ForegroundColor Yellow
     Write-Host ''
 }
 
