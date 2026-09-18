@@ -48,18 +48,18 @@ avant d'annoncer une réussite.
    Quels langages voulez-vous ?
    Choisissez-en un ou plusieurs, séparés par des virgules (ex. 1,3)
 
-     1) C / C++       - gcc, g++, gdb, make, valgrind
-     2) C#            - SDK .NET
-     3) Rust          - rustup, cargo, rustc
-     4) Go            - compilateur et outils Go
-     5) Python        - python3 et pip
-     6) Java          - JDK (javac, java)
+     1) C / C++       - gcc, g++, gdb, make, valgrind    ~ 1.6 GB
+     2) C#            - SDK .NET                         ~ 900 MB
+     3) Rust          - rustup, cargo, rustc             ~ 1.5 GB
+     4) Go            - compilateur et outils Go         ~ 550 MB
+     5) Python        - python3 et pip                   ~ 150 MB
+     6) Java          - JDK (javac, java)                ~ 350 MB
 
    Quels éditeurs voulez-vous ?
 
-     1) Visual Studio Code  - IDE complet, débogueur, IntelliSense
-     2) Kate                - éditeur KDE léger
-     3) Vim                 - éditeur en terminal, toujours disponible
+     1) Visual Studio Code  - IDE complet, débogueur    ~ 400 MB
+     2) Kate                - éditeur KDE léger         ~ 300 MB
+     3) Vim                 - éditeur en terminal       ~  60 MB
      0) Aucun - j'ai déjà un éditeur
 ```
 
@@ -69,14 +69,48 @@ Aux questions par oui/non, le script accepte `o` comme `y`.
 
 ## Ce que vous obtenez
 
-| Langage | Windows | Linux / WSL / macOS | Vérifié par |
-|---|---|---|---|
-| **C / C++** | MinGW-w64 via MSYS2 (UCRT64) | gcc, g++, gdb, make, valgrind | compilation + exécution C et C++ |
-| **C#** | SDK .NET 8 | paquet de la distribution, sinon script Microsoft | enregistrement du SDK |
-| **Rust** | rustup | rustup (installateur officiel) | compilation + exécution `rustc` |
-| **Go** | winget | paquet de la distribution | `go run` |
-| **Python** | winget | python3 + pip | exécution d'une instruction |
-| **Java** | Microsoft OpenJDK 21 | JDK de la distribution | `javac` + `java` |
+| Langage | Windows | Linux / WSL / macOS | Taille approx. | Vérifié par |
+|---|---|---|---|---|
+| **C / C++** | MinGW-w64 via MSYS2 (UCRT64) | gcc, g++, gdb, make, valgrind | 1,6 Go / 450 Mo | compilation + exécution C et C++ |
+| **C#** | SDK .NET 8 | paquet de la distribution, sinon script Microsoft | ~900 Mo | enregistrement du SDK |
+| **Rust** | rustup | rustup (installateur officiel) | ~1,5 Go | compilation + exécution `rustc` |
+| **Go** | winget | paquet de la distribution | ~550 Mo | `go run` |
+| **Python** | winget | python3 + pip | ~200 Mo | exécution d'une instruction |
+| **Java** | Microsoft OpenJDK 21 | JDK de la distribution | ~400 Mo | `javac` + `java` |
+
+Éditeurs : VS Code ~400 Mo, Kate ~120–300 Mo, Vim ~50 Mo.
+
+### Rien n'est téléchargé avant que vous ayez vu la note
+
+Les tailles s'affichent à côté de chaque option pendant que vous choisissez, puis le
+script affiche un récapitulatif et attend :
+
+```
+   Ce qui va être installé
+
+     C / C++                déjà installé, rien à télécharger
+     Go                     ~ 550 MB
+     Visual Studio Code     ~ 400 MB
+     ---------------------------------------------
+     Total estimé           ~ 950 MB
+     Espace libre sur C:\     203.6 GB
+
+   Tailles approximatives, dépendances comprises.
+
+   Lancer l'installation ? (o/n) [o] :
+```
+
+Ce qui est déjà présent sur votre machine compte pour **0 Mo** et est signalé : le
+total correspond donc à ce qui sera réellement téléchargé.
+
+L'espace libre est comparé à ce total, plus une marge, car les installateurs
+décompressent avant de nettoyer :
+
+- **Moins que le total** — le script refuse de démarrer et indique ce qu'il faut.
+- **Moins que le total + 25 % + 500 Mo** — il prévient et vous laisse décider.
+- **Espace indéterminable** — il le dit et continue plutôt que de deviner.
+
+Répondre `n` quitte sans rien modifier.
 
 Chaque vérification est une vraie compilation suivie d'une exécution, pas une simple
 lecture de numéro de version. C'est important : sur ma propre machine, le `python3` du

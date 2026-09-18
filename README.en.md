@@ -45,18 +45,18 @@ compiling and running a real program in each language before claiming success.
    Which languages do you want?
    Pick one or several, separated by commas (e.g. 1,3)
 
-     1) C / C++       - gcc, g++, gdb, make, valgrind
-     2) C#            - .NET SDK
-     3) Rust          - rustup, cargo, rustc
-     4) Go            - go compiler and tools
-     5) Python        - python3 and pip
-     6) Java          - JDK (javac, java)
+     1) C / C++       - gcc, g++, gdb, make, valgrind    ~ 1.6 GB
+     2) C#            - .NET SDK                         ~ 900 MB
+     3) Rust          - rustup, cargo, rustc             ~ 1.5 GB
+     4) Go            - go compiler and tools            ~ 550 MB
+     5) Python        - python3 and pip                  ~ 150 MB
+     6) Java          - JDK (javac, java)                ~ 350 MB
 
    Which editors do you want?
 
-     1) Visual Studio Code  - full IDE, debugger, IntelliSense
-     2) Kate                - lightweight KDE editor
-     3) Vim                 - terminal editor, always available
+     1) Visual Studio Code  - full IDE, debugger        ~ 400 MB
+     2) Kate                - lightweight KDE editor    ~ 300 MB
+     3) Vim                 - terminal editor           ~  60 MB
      0) None - I already have an editor
 ```
 
@@ -64,14 +64,48 @@ compiling and running a real program in each language before claiming success.
 
 ## What you get
 
-| Language | Windows | Linux / WSL / macOS | Verified by |
-|---|---|---|---|
-| **C / C++** | MinGW-w64 via MSYS2 (UCRT64) | distro gcc, g++, gdb, make, valgrind | compiling + running C and C++ |
-| **C#** | .NET SDK 8 | distro package, else Microsoft's installer | SDK registration |
-| **Rust** | rustup | rustup (official installer) | compiling + running `rustc` |
-| **Go** | winget | distro package | `go run` |
-| **Python** | winget | distro python3 + pip | executing a statement |
-| **Java** | Microsoft OpenJDK 21 | distro JDK | `javac` + `java` |
+| Language | Windows | Linux / WSL / macOS | Approx. size | Verified by |
+|---|---|---|---|---|
+| **C / C++** | MinGW-w64 via MSYS2 (UCRT64) | distro gcc, g++, gdb, make, valgrind | 1.6 GB / 450 MB | compiling + running C and C++ |
+| **C#** | .NET SDK 8 | distro package, else Microsoft's installer | ~900 MB | SDK registration |
+| **Rust** | rustup | rustup (official installer) | ~1.5 GB | compiling + running `rustc` |
+| **Go** | winget | distro package | ~550 MB | `go run` |
+| **Python** | winget | distro python3 + pip | ~200 MB | executing a statement |
+| **Java** | Microsoft OpenJDK 21 | distro JDK | ~400 MB | `javac` + `java` |
+
+Editors: VS Code ~400 MB, Kate ~120–300 MB, Vim ~50 MB.
+
+### Nothing is downloaded before you see the bill
+
+Sizes appear next to every option while you are choosing, and once you have picked,
+the script prints a plan and waits:
+
+```
+   About to install
+
+     C / C++                already installed, nothing to download
+     Go                     ~ 550 MB
+     Visual Studio Code     ~ 400 MB
+     ---------------------------------------------
+     Estimated total        ~ 950 MB
+     Free space on C:\        203.6 GB
+
+   Sizes are approximate and include dependencies.
+
+   Proceed with the installation? (y/n) [y]:
+```
+
+Anything already on your machine counts as **0 MB** and is labelled, so the total is
+what will actually be downloaded, not a catalogue price.
+
+Free space is checked against that total plus headroom, because installers unpack
+before they clean up:
+
+- **Less than the total** — refuses to start and tells you how much is needed.
+- **Less than total + 25% + 500 MB** — warns, then lets you decide.
+- **Space cannot be determined** — says so and continues rather than guessing.
+
+Answering `n` exits without touching anything.
 
 Every check is a real build and run, not a version string. That matters: on my own
 machine the Microsoft Store's `python3` stub resolves fine on PATH and **fails** the

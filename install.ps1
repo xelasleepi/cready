@@ -180,6 +180,8 @@ $Messages = @{
     'tc_ok'          = @{ en = '{0} installed';                                       fr = '{0} installé' }
     'tc_failed'      = @{ en = '{0} installation failed - continuing with the rest';   fr = "Échec de l'installation de {0} - on continue" }
     'nowinget'       = @{ en = 'winget is unavailable - cannot install {0} automatically'; fr = "winget indisponible - impossible d'installer {0} automatiquement" }
+    'winget_code'    = @{ en = '{0} install did not complete (winget exit code {1})'; fr = "L'installation de {0} a échoué (winget code {1})" }
+    'winget_cancel'  = @{ en = 'Exit code 1602 usually means a UAC prompt was declined.'; fr = 'Le code 1602 signifie en general qu une invite UAC a ete refusee.' }
     'winget_inst'    = @{ en = 'Installing {0} via winget';                           fr = 'Installation de {0} via winget' }
 
     'path_have'      = @{ en = 'Already on PATH: {0}';                                fr = 'Déjà dans le PATH : {0}' }
@@ -218,6 +220,17 @@ $Messages = @{
 
     'sc_kept'        = @{ en = 'Kept existing {0}';                                   fr = 'Fichier {0} conservé' }
     'sc_ok'          = @{ en = 'Starter project created at {0}';                      fr = 'Projet de départ créé dans {0}' }
+
+    'plan_title'     = @{ en = 'About to install';                                    fr = 'Ce qui va être installé' }
+    'plan_total'     = @{ en = 'Estimated total';                                     fr = 'Total estimé' }
+    'plan_free'      = @{ en = 'Free space on {0}';                                   fr = 'Espace libre sur {0}' }
+    'plan_note'      = @{ en = 'Sizes are approximate and include dependencies.';     fr = 'Tailles approximatives, dépendances comprises.' }
+    'plan_already'   = @{ en = 'already installed, nothing to download';              fr = 'déjà installé, rien à télécharger' }
+    'q_proceed'      = @{ en = 'Proceed with the installation?';                      fr = "Lancer l'installation ?" }
+    'plan_cancel'    = @{ en = 'Cancelled - nothing was installed.';                  fr = "Annulé - rien n'a été installé." }
+    'space_none'     = @{ en = 'Not enough free space: {0} needed, {1} available on {2}.'; fr = 'Espace insuffisant : {0} nécessaires, {1} disponibles sur {2}.' }
+    'space_low'      = @{ en = 'Space is tight: {0} free, and installers need room to unpack.'; fr = 'Espace limité : {0} libres, et les installateurs ont besoin de place.' }
+    'space_unknown'  = @{ en = 'Could not determine free disk space - continuing anyway'; fr = "Impossible de déterminer l'espace disque - on continue" }
 
     'done_title'     = @{ en = 'Installation complete';                               fr = 'Installation terminée' }
     'summary'        = @{ en = 'What you have now:';                                  fr = 'Ce dont vous disposez :' }
@@ -351,12 +364,11 @@ function Get-Toolchains {
     Write-Host ("   " + (T 'q_tc'))
     Write-Host ("   " + (T 'q_multi')) -ForegroundColor DarkGray
     Write-Host ''
-    Write-Host ("     1) " + (T 'tc_cpp'))
-    Write-Host ("     2) " + (T 'tc_dotnet'))
-    Write-Host ("     3) " + (T 'tc_rust'))
-    Write-Host ("     4) " + (T 'tc_go'))
-    Write-Host ("     5) " + (T 'tc_python'))
-    Write-Host ("     6) " + (T 'tc_java'))
+    $n = 1
+    foreach ($id in $AllToolchains) {
+        Write-Host ('     {0}) {1,-46} ~ {2}' -f $n, (T "tc_$id"), (Format-Size (Get-ToolchainSize $id)))
+        $n++
+    }
     Write-Host ''
 
     while ($true) {
@@ -379,9 +391,11 @@ function Get-Editors {
     Write-Host ("   " + (T 'q_editor'))
     Write-Host ("   " + (T 'q_multi')) -ForegroundColor DarkGray
     Write-Host ''
-    Write-Host ("     1) " + (T 'ed_vscode'))
-    Write-Host ("     2) " + (T 'ed_kate'))
-    Write-Host ("     3) " + (T 'ed_vim'))
+    $n = 1
+    foreach ($id in $AllEditors) {
+        Write-Host ('     {0}) {1,-46} ~ {2}' -f $n, (T "ed_$id"), (Format-Size (Get-EditorSize $id)))
+        $n++
+    }
     Write-Host ("     " + (T 'ed_none'))
     Write-Host ''
 
@@ -461,8 +475,21 @@ function Install-ViaWinget {
     Write-Note (T 'winget_inst' $Label)
     $argList = @('install', '--id', $Id, '-e', '--source', 'winget',
                  '--accept-package-agreements', '--accept-source-agreements') + $ExtraArgs
-    & $winget @argList 2>&1 | ForEach-Object { Write-Note $_ }
+
+    # winget's own exit code is the only reliable signal. A UAC prompt that is
+    # declined returns 1602 while still printing progress, so judging success
+    # from the output alone would report a cancelled install as working.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $winget @argList 2>&1 | ForEach-Object { Write-Note $_ } }
+    finally { $ErrorActionPreference = $previous }
+    $code = $LASTEXITCODE
+
     Sync-ProcessPath
+    if ($code -ne 0) {
+        Write-Warn (T 'winget_code' $Label $code)
+        return $false
+    }
     return $true
 }
 
@@ -599,6 +626,76 @@ function Get-ToolchainProbe {
     }
 }
 
+# Approximate installed size in MB, dependencies included. Deliberately on the
+# generous side: warning about space you turned out not to need is a much
+# smaller problem than running out halfway through a 1 GB download. Windows
+# numbers are higher than Linux because MSYS2 ships its own userland.
+function Get-ToolchainSize {
+    param([string]$Id)
+    switch ($Id) {
+        'cpp'    { return 1600 }
+        'dotnet' { return 900 }
+        'rust'   { return 1500 }
+        'go'     { return 550 }
+        'python' { return 150 }
+        'java'   { return 350 }
+        default  { return 100 }
+    }
+}
+
+function Get-EditorLabel {
+    param([string]$Id)
+    switch ($Id) {
+        'vscode' { return 'Visual Studio Code' }
+        'kate'   { return 'Kate' }
+        'vim'    { return 'Vim' }
+        default  { return $Id }
+    }
+}
+
+function Get-EditorSize {
+    param([string]$Id)
+    switch ($Id) {
+        'vscode' { return 400 }
+        'kate'   { return 300 }
+        'vim'    { return 60 }
+        default  { return 50 }
+    }
+}
+
+function Test-EditorPresent {
+    param([string]$Id)
+    switch ($Id) {
+        'vscode' { return [bool](Find-VSCode) }
+        'kate'   { return [bool](Find-Kate) }
+        'vim'    { return [bool](Resolve-Tool 'vim') }
+        default  { return $false }
+    }
+}
+
+function Format-Size {
+    param([int]$Megabytes)
+    if ($Megabytes -ge 1024) {
+        return ('{0:N1} GB' -f ($Megabytes / 1024.0))
+    }
+    return "$Megabytes MB"
+}
+
+# Free space in MB on the volume holding $Path, or $null when it cannot be
+# determined (a mapped drive, an unusual provider). Callers treat $null as
+# "unknown" rather than zero.
+function Get-FreeSpaceMb {
+    param([string]$Path)
+    try {
+        $root = [System.IO.Path]::GetPathRoot($Path)
+        if (-not $root) { return $null }
+        $drive = Get-PSDrive -Name $root.Substring(0, 1) -ErrorAction Stop
+        if ($null -eq $drive.Free) { return $null }
+        return [int]($drive.Free / 1MB)
+    }
+    catch { return $null }
+}
+
 function Install-Toolchain {
     param([string]$Id)
 
@@ -617,23 +714,28 @@ function Install-Toolchain {
         }
     }
 
+    $ok = $true
     switch ($Id) {
         'cpp'    { Install-CppToolchain; return }
-        'dotnet' { Install-ViaWinget -Id 'Microsoft.DotNet.SDK.8'  -Label $label | Out-Null }
-        'rust'   { Install-ViaWinget -Id 'Rustlang.Rustup'         -Label $label | Out-Null }
-        'go'     { Install-ViaWinget -Id 'GoLang.Go'               -Label $label | Out-Null }
-        'python' { Install-ViaWinget -Id 'Python.Python.3.12'      -Label $label | Out-Null }
-        'java'   { Install-ViaWinget -Id 'Microsoft.OpenJDK.21'    -Label $label | Out-Null }
+        'dotnet' { $ok = Install-ViaWinget -Id 'Microsoft.DotNet.SDK.8'  -Label $label }
+        'rust'   { $ok = Install-ViaWinget -Id 'Rustlang.Rustup'         -Label $label }
+        'go'     { $ok = Install-ViaWinget -Id 'GoLang.Go'               -Label $label }
+        'python' { $ok = Install-ViaWinget -Id 'Python.Python.3.12'      -Label $label }
+        'java'   { $ok = Install-ViaWinget -Id 'Microsoft.OpenJDK.21'    -Label $label }
     }
 
     Sync-ProcessPath
     if (Resolve-Tool $probe) {
         Write-Ok (T 'tc_ok' $label)
     }
-    else {
-        # winget frequently installs correctly but the new PATH only reaches
-        # brand-new processes, so this is a warning rather than a failure.
+    elseif ($ok) {
+        # winget succeeded but the new PATH only reaches brand-new processes,
+        # so this is a stale-environment warning rather than a failure.
         Write-Warn (T 'v_newshell' $label)
+    }
+    else {
+        Write-Warn (T 'tc_failed' $label)
+        Write-Note (T 'winget_cancel')
     }
 }
 
@@ -989,6 +1091,83 @@ int main(void)
 $Script:SelectedToolchains = @()
 $Script:SelectedEditors    = @()
 
+# Prints what is about to happen, what it costs, and what the disk has, then
+# asks for confirmation. Anything already installed is counted as 0 MB and
+# labelled, so the number reflects what will actually be downloaded.
+function Show-PlanAndConfirm {
+    # Detection drives the numbers, so the process PATH has to reflect the
+    # registry first. Without this, an already-installed toolchain looks
+    # missing and the estimate overstates what will actually be downloaded.
+    Sync-ProcessPath
+
+    $total = 0
+    Write-Host ''
+    Write-Host ("   " + (T 'plan_title'))
+    Write-Host ''
+
+    foreach ($id in $Script:SelectedToolchains) {
+        $label = Get-ToolchainLabel $id
+        if (Resolve-Tool (Get-ToolchainProbe $id)) {
+            Write-Host ('     {0,-22} {1}' -f $label, (T 'plan_already')) -ForegroundColor DarkGray
+        }
+        else {
+            $size = Get-ToolchainSize $id
+            $total += $size
+            Write-Host ('     {0,-22} ~ {1}' -f $label, (Format-Size $size))
+        }
+    }
+
+    foreach ($id in $Script:SelectedEditors) {
+        $label = Get-EditorLabel $id
+        if (Test-EditorPresent $id) {
+            Write-Host ('     {0,-22} {1}' -f $label, (T 'plan_already')) -ForegroundColor DarkGray
+        }
+        else {
+            $size = Get-EditorSize $id
+            $total += $size
+            Write-Host ('     {0,-22} ~ {1}' -f $label, (Format-Size $size))
+        }
+    }
+
+    Write-Host '     ---------------------------------------------'
+    Write-Host ('     {0,-22} ~ {1}' -f (T 'plan_total'), (Format-Size $total))
+
+    # MSYS2 and most installers land on the drive holding the MSYS2 root, so
+    # that is the volume whose free space actually matters.
+    $target = [System.IO.Path]::GetPathRoot($Config.Msys2Root)
+    $free   = Get-FreeSpaceMb $Config.Msys2Root
+
+    if ($null -eq $free) {
+        Write-Host ''
+        Write-Warn (T 'space_unknown')
+    }
+    else {
+        Write-Host ('     {0,-22}   {1}' -f (T 'plan_free' $target), (Format-Size $free))
+        Write-Host ''
+        Write-Host ("   " + (T 'plan_note')) -ForegroundColor DarkGray
+
+        # Installers unpack before they clean up, so headroom beyond the final
+        # footprint is genuinely needed, not padding.
+        $need = [int]($total * 1.25) + 500
+        if ($total -gt 0 -and $free -lt $total) {
+            throw (T 'space_none' (Format-Size $need) (Format-Size $free) $target)
+        }
+        if ($total -gt 0 -and $free -lt $need) {
+            Write-Warn (T 'space_low' (Format-Size $free))
+        }
+    }
+
+    Write-Host ''
+    if ($total -eq 0) { return }
+
+    if (-not (Read-Confirm (T 'q_proceed'))) {
+        Write-Host ''
+        Write-Note (T 'plan_cancel')
+        Write-Host ''
+        exit 0
+    }
+}
+
 function Invoke-Bootstrap {
     # Before the banner, because the banner itself is localized.
     if (-not $LanguageWasPinned) { $Config.Language = Get-Language }
@@ -1011,6 +1190,8 @@ function Invoke-Bootstrap {
     if ($Script:SelectedToolchains.Count -eq 0 -and $Script:SelectedEditors.Count -eq 0) {
         throw (T 'e_nopick')
     }
+
+    Show-PlanAndConfirm
 
     $total = $Script:SelectedToolchains.Count + 1
     if ($Script:SelectedEditors.Count -gt 0) { $total++ }

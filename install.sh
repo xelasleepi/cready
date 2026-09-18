@@ -300,6 +300,28 @@ msg() {
     e_pm)           en="Unknown package manager: %s"
                     fr="Gestionnaire de paquets inconnu : %s" ;;
 
+    # -- size / disk ------------------------------------------------------
+    plan_title)     en="About to install"
+                    fr="Ce qui va être installé" ;;
+    plan_total)     en="Estimated total"
+                    fr="Total estimé" ;;
+    plan_free)      en="Free space on %s"
+                    fr="Espace libre sur %s" ;;
+    plan_note)      en="Sizes are approximate and include dependencies."
+                    fr="Tailles approximatives, dépendances comprises." ;;
+    plan_already)   en="already installed, nothing to download"
+                    fr="déjà installé, rien à télécharger" ;;
+    q_proceed)      en="Proceed with the installation?"
+                    fr="Lancer l'installation ?" ;;
+    plan_cancel)    en="Cancelled - nothing was installed."
+                    fr="Annulé - rien n'a été installé." ;;
+    space_none)     en="Not enough free space: %s needed, %s available on %s."
+                    fr="Espace insuffisant : %s nécessaires, %s disponibles sur %s." ;;
+    space_low)      en="Space is tight: %s free, and installers need room to unpack."
+                    fr="Espace limité : %s libres, et les installateurs ont besoin de place." ;;
+    space_unknown)  en="Could not determine free disk space - continuing anyway"
+                    fr="Impossible de déterminer l'espace disque - on continue" ;;
+
     # -- summary ----------------------------------------------------------
     done_title)     en="Installation complete"
                     fr="Installation terminée" ;;
@@ -472,12 +494,12 @@ choose_toolchains() {
         printf '\n'
         printf '   %s\n' "$(msg q_tc)"
         printf '   %s%s%s\n\n' "$C_DIM" "$(msg q_multi)" "$C_RESET"
-        printf '     1) %s\n' "$(msg tc_cpp)"
-        printf '     2) %s\n' "$(msg tc_dotnet)"
-        printf '     3) %s\n' "$(msg tc_rust)"
-        printf '     4) %s\n' "$(msg tc_go)"
-        printf '     5) %s\n' "$(msg tc_python)"
-        printf '     6) %s\n\n' "$(msg tc_java)"
+        printf '     1) %-46s ~ %s\n'   "$(msg tc_cpp)"    "$(human_mb "$(tc_size cpp)")"
+        printf '     2) %-46s ~ %s\n'   "$(msg tc_dotnet)" "$(human_mb "$(tc_size dotnet)")"
+        printf '     3) %-46s ~ %s\n'   "$(msg tc_rust)"   "$(human_mb "$(tc_size rust)")"
+        printf '     4) %-46s ~ %s\n'   "$(msg tc_go)"     "$(human_mb "$(tc_size go)")"
+        printf '     5) %-46s ~ %s\n'   "$(msg tc_python)" "$(human_mb "$(tc_size python)")"
+        printf '     6) %-46s ~ %s\n\n' "$(msg tc_java)"   "$(human_mb "$(tc_size java)")"
     } >&2
 
     local picked bad
@@ -509,9 +531,9 @@ choose_editors() {
         printf '\n'
         printf '   %s\n' "$(msg q_editor)"
         printf '   %s%s%s\n\n' "$C_DIM" "$(msg q_multi)" "$C_RESET"
-        printf '     1) %s\n' "$(msg ed_vscode)"
-        printf '     2) %s\n' "$(msg ed_kate)"
-        printf '     3) %s\n' "$(msg ed_vim)"
+        printf '     1) %-46s ~ %s\n' "$(msg ed_vscode)" "$(human_mb "$(ed_size vscode)")"
+        printf '     2) %-46s ~ %s\n' "$(msg ed_kate)"   "$(human_mb "$(ed_size kate)")"
+        printf '     3) %-46s ~ %s\n' "$(msg ed_vim)"    "$(human_mb "$(ed_size vim)")"
         printf '     %s\n\n' "$(msg ed_none)"
     } >&2
 
@@ -711,6 +733,62 @@ tc_packages() {
         rust:*)         printf '' ;;
         *)              printf '' ;;
     esac
+}
+
+# Approximate installed size in MB, dependencies included. Deliberately on the
+# generous side: warning about space you turned out not to need is a much
+# smaller problem than running out halfway through a 1 GB download.
+tc_size() {
+    case "$1" in
+        cpp)    printf '450' ;;
+        dotnet) printf '850' ;;
+        rust)   printf '1300' ;;
+        go)     printf '550' ;;
+        python) printf '200' ;;
+        java)   printf '400' ;;
+        *)      printf '100' ;;
+    esac
+}
+
+ed_label() {
+    case "$1" in
+        vscode) printf 'Visual Studio Code' ;;
+        kate)   printf 'Kate' ;;
+        vim)    printf 'Vim' ;;
+        *)      printf '%s' "$1" ;;
+    esac
+}
+
+ed_size() {
+    case "$1" in
+        vscode) printf '400' ;;
+        kate)   printf '120' ;;
+        vim)    printf '50' ;;
+        *)      printf '50' ;;
+    esac
+}
+
+ed_probe() {
+    case "$1" in
+        vscode) printf 'code' ;;
+        kate)   printf 'kate' ;;
+        vim)    printf 'vim' ;;
+    esac
+}
+
+human_mb() {
+    local mb="$1"
+    if [ "$mb" -ge 1024 ]; then
+        printf '%d.%d GB' "$((mb / 1024))" "$(( (mb % 1024) * 10 / 1024 ))"
+    else
+        printf '%d MB' "$mb"
+    fi
+}
+
+# Available space in MB on the filesystem holding $1. Prints nothing when df
+# is unavailable or fails, which callers treat as "unknown" rather than zero.
+free_mb() {
+    df -Pk "$1" 2>/dev/null | awk 'NR==2 { print int($4/1024) }'
 }
 
 install_toolchain() {
@@ -1260,6 +1338,77 @@ PROPS
 SELECTED_TOOLCHAINS=''
 SELECTED_EDITORS=''
 
+# Prints what is about to happen, what it costs, and what the disk has, then
+# asks for confirmation. Anything already installed is counted as 0 MB and
+# labelled, so the number reflects what will actually be downloaded.
+show_plan_and_confirm() {
+    local total=0 id sz probe target free need
+
+    printf '\n   %s\n\n' "$(msg plan_title)"
+
+    for id in $SELECTED_TOOLCHAINS; do
+        probe="$(tc_probe "$id")"
+        if command -v "$probe" >/dev/null 2>&1; then
+            printf '     %-22s %s%s%s\n' "$(tc_label "$id")" "$C_DIM" "$(msg plan_already)" "$C_RESET"
+        else
+            sz="$(tc_size "$id")"; total=$((total + sz))
+            printf '     %-22s ~ %s\n' "$(tc_label "$id")" "$(human_mb "$sz")"
+        fi
+    done
+
+    for id in $SELECTED_EDITORS; do
+        probe="$(ed_probe "$id")"
+        if command -v "$probe" >/dev/null 2>&1; then
+            printf '     %-22s %s%s%s\n' "$(ed_label "$id")" "$C_DIM" "$(msg plan_already)" "$C_RESET"
+        else
+            sz="$(ed_size "$id")"; total=$((total + sz))
+            printf '     %-22s ~ %s\n' "$(ed_label "$id")" "$(human_mb "$sz")"
+        fi
+    done
+
+    printf '     %s\n' '---------------------------------------------'
+    printf '     %-22s ~ %s\n' "$(msg plan_total)" "$(human_mb "$total")"
+
+    # Packages land under /, rustup and the dotnet fallback under $HOME. When
+    # those are separate filesystems the smaller one is what constrains us.
+    target='/'
+    free="$(free_mb '/')"
+    local home_free
+    home_free="$(free_mb "$HOME")"
+    if [ -n "$home_free" ] && [ -n "$free" ] && [ "$home_free" -lt "$free" ]; then
+        target="$HOME"; free="$home_free"
+    fi
+
+    if [ -z "$free" ]; then
+        printf '\n'
+        warn "$(msg space_unknown)"
+    else
+        printf '     %-22s   %s\n' "$(msg plan_free "$target")" "$(human_mb "$free")"
+        printf '\n   %s%s%s\n' "$C_DIM" "$(msg plan_note)" "$C_RESET"
+
+        # Installers unpack before they clean up, so headroom beyond the final
+        # footprint is genuinely needed, not padding.
+        need=$(( total * 5 / 4 + 500 ))
+        if [ "$total" -gt 0 ] && [ "$free" -lt "$total" ]; then
+            die "$(msg space_none "$(human_mb "$need")" "$(human_mb "$free")" "$target")"
+        fi
+        if [ "$total" -gt 0 ] && [ "$free" -lt "$need" ]; then
+            warn "$(msg space_low "$(human_mb "$free")")"
+        fi
+    fi
+
+    printf '\n'
+    if [ "$total" -eq 0 ]; then
+        return 0
+    fi
+    if ! confirm "$(msg q_proceed)"; then
+        printf '\n'
+        note "$(msg plan_cancel)"
+        printf '\n'
+        exit 0
+    fi
+}
+
 main() {
     # Before the banner, because the banner itself is localized.
     if [ "$CBOOT_LANG_EXPLICIT" = "0" ]; then
@@ -1286,6 +1435,8 @@ main() {
         case " $ALL_EDITORS " in *" $id "*) ;; *) die "$(msg e_badpick "$id")" ;; esac
     done
     [ -z "$SELECTED_TOOLCHAINS" ] && [ -z "$SELECTED_EDITORS" ] && die "$(msg e_nopick)"
+
+    show_plan_and_confirm
 
     local total=0
     for id in $SELECTED_TOOLCHAINS; do total=$((total + 1)); done
