@@ -34,22 +34,26 @@ Le script vous demande ce dont vous avez besoin, n'installe que cela, puis **pro
 tout fonctionne** en compilant et en exécutant un vrai programme avant d'annoncer une
 réussite.
 
-> Les questions du script s'affichent en anglais. Cette page explique chaque choix.
+**Le script parle français.** Il détecte votre langue système (`$LANG` sous Linux, la
+langue d'affichage de Windows) et s'adapte tout seul. Vous pouvez la forcer avec
+`CBOOT_LANG=fr` ou `CBOOT_LANG=en`.
 
 ```
-   What do you need this machine set up for?     (Pour quoi faire ?)
+   Pour quel usage voulez-vous configurer cette machine ?
 
-     1) C only        - C ANSI uniquement (gcc, gdb, make)
-     2) C and C++     - ajoute le compilateur g++
-     3) Full setup    - C, C++ et un éditeur
+     1) C uniquement  - TP de C ANSI (gcc, gdb, make)
+     2) C et C++      - ajoute le compilateur g++
+     3) Complet       - C, C++ et un éditeur
 
-   Which editor do you want?                     (Quel éditeur ?)
+   Quel éditeur voulez-vous ?
 
      1) Visual Studio Code  - IDE complet, débogueur, IntelliSense
      2) Kate                - éditeur KDE léger, rapide, simple
-     3) Both                - les deux
-     4) Neither             - aucun, j'en ai déjà un
+     3) Les deux
+     4) Aucun               - j'en ai déjà un
 ```
+
+Aux questions par oui/non, le script accepte `o` comme `y`.
 
 ---
 
@@ -132,6 +136,7 @@ pour les machines de TP et les installations automatisées.
 
 | Variable | Rôle | Défaut |
 |---|---|---|
+| `CBOOT_LANG` | `en` ou `fr` | *langue du système* |
 | `CBOOT_PROFILE` | `c`, `cpp` ou `full` (saute la question) | *demande* |
 | `CBOOT_EDITOR` | `vscode`, `kate`, `both` ou `none` | *demande* |
 | `CBOOT_ASSUME_YES` | `1` = ne jamais demander, accepter tous les défauts | `0` |

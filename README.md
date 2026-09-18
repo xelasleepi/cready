@@ -31,6 +31,9 @@ curl -fsSL https://raw.githubusercontent.com/xelasleepi/cready/main/install.sh |
 The script asks what you need, installs only that, and then **proves it works** by
 compiling and running a real program before it claims success.
 
+**It speaks English and French**, following your system language. Force it with
+`CBOOT_LANG=fr` or `CBOOT_LANG=en`.
+
 ```
    What do you need this machine set up for?
 
@@ -122,6 +125,7 @@ Set these before running to skip the questions. Useful for lab machines and scri
 
 | Variable | Does what | Default |
 |---|---|---|
+| `CBOOT_LANG` | `en` or `fr` | *system language* |
 | `CBOOT_PROFILE` | `c`, `cpp`, or `full` (skips the prompt) | *asks* |
 | `CBOOT_EDITOR` | `vscode`, `kate`, `both`, or `none` | *asks* |
 | `CBOOT_ASSUME_YES` | `1` = never prompt, take every default | `0` |
